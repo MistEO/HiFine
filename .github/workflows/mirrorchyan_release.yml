@@ -1,0 +1,45 @@
+name: mirrorchyan_release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        default: ''
+        required: false
+
+jobs:
+  mirrorchyan:
+    if: ${{ github.repository_owner == 'MistEO' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: win
+            arch: x64
+            filename: 'HiFine-*-windows-x64-setup.exe'
+          - os: macos
+            arch: arm64
+            filename: 'HiFine-*-macOS-arm64.dmg'
+          - os: macos
+            arch: x64
+            filename: 'HiFine-*-macOS-x86_64.dmg'
+          - os: linux
+            arch: x64
+            filename: 'HiFine-*-linux-amd64.deb'
+
+    steps:
+      - uses: MirrorChyan/uploading-action@v1
+        with:
+          filetype: latest-release
+          filename: ${{ matrix.filename }}
+          mirrorchyan_rid: HiFine
+          tag: ${{ inputs.tag }}
+
+          os: ${{ matrix.os }}
+          arch: ${{ matrix.arch }}
+
+          owner: MistEO
+          repo: HiFine
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          upload_token: ${{ secrets.MirrorChyanUploadToken }}

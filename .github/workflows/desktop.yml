@@ -125,6 +125,7 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -179,3 +180,10 @@ jobs:
           gh release view "$TAG" --json assets --jq '.assets[] | [(.digest | sub("^sha256:"; "")), .name] | join("  ")' | sort -k2 > "$RUNNER_TEMP/uploaded"
           diff -u "$RUNNER_TEMP/expected" "$RUNNER_TEMP/uploaded"
           gh release edit "$TAG" --draft=false --latest --notes-file "$notes"
+      - name: Trigger MirrorChyanUploading
+        shell: bash
+        run: |
+          gh workflow run --repo $GITHUB_REPOSITORY mirrorchyan_release.yml -f tag=${{ github.ref_name }}
+          gh workflow run --repo $GITHUB_REPOSITORY mirrorchyan_release_note.yml -f tag=${{ github.ref_name }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
