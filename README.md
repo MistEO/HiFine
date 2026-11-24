@@ -8,7 +8,7 @@
 
 **[GitHub 免费下载][latest-release] · [Mirror 酱高速下载][mirror-download] · [MIT 开源](LICENSE)**
 
-![HiFine 正在显示 Jim Peaco 拍摄的《大棱镜泉》，左侧是缩略图，右侧是照片信息](docs/preview.webp)
+![HiFine 正在显示 Jim Peaco 拍摄的《雪中赤狐》。左侧选中了两张照片，右侧可以看到焦距、光圈和快门。](docs/preview.webp)
 
 ## 拿它挑片
 
