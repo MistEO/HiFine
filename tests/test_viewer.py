@@ -16,6 +16,7 @@ from PySide6.QtWidgets import QAbstractButton, QApplication, QDialogButtonBox, Q
 
 from hifine import file_menu, reader
 from hifine.app import SAMPLE
+from hifine.favorites import FavoriteStore
 from hifine.file_clipboard import read_file_clipboard, write_file_clipboard
 from hifine.settings import AppSettings
 from hifine.viewer import MainWindow
@@ -36,8 +37,9 @@ def settings_store(tmp_path):
 
 
 @pytest.fixture()
-def window(app, settings_store):
-    widget = MainWindow(sample_path=SAMPLE, settings_store=settings_store)
+def window(app, settings_store, tmp_path):
+    widget = MainWindow(sample_path=SAMPLE, settings_store=settings_store,
+                        favorite_store=FavoriteStore(tmp_path / "profile" / "favorites.sqlite3"))
     widget.show()
     widget.activateWindow()
     app.processEvents()
@@ -73,6 +75,136 @@ def thumbnail_color(row):
 
 def request_menu(app, widget, point):
     app.sendEvent(widget, QContextMenuEvent(QContextMenuEvent.Reason.Mouse, point, widget.mapToGlobal(point)))
+
+
+def test_star_filter_navigation_bulk_copy_and_unmark(app, window, tmp_path):
+    paths = [tmp_path / f"{n}.jpg" for n in range(4)]
+    for path in paths:
+        Image.new("RGB", (8, 8)).save(path)
+    window.open_file(paths[0])
+    finish_read(app, window)
+    view = window.thumbnail_list
+    # A second window may already have starred the photo since this one loaded.
+    window._favorite_store.set_favorite(paths[0], True)
+    QTest.keyClick(view, Qt.Key.Key_F)
+    assert window.favorite_button.isChecked()
+    assert window._favorite_store.in_folder(tmp_path) == {paths[0]}
+    window.navigate(2)
+    finish_read(app, window)
+    QTest.mouseClick(window.favorite_button, Qt.MouseButton.LeftButton)
+    assert window.favorite_button.isChecked()
+    window.open_file(paths[1])
+    finish_read(app, window)
+    QTest.mouseClick(window.favorite_filter, Qt.MouseButton.LeftButton)
+    finish_read(app, window)
+    assert window.files == [paths[0], paths[2]] and window.current_path == paths[2]
+    QTest.keyClick(view, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+    QTest.keyClick(view, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
+    assert read_file_clipboard(app.clipboard()).paths == (paths[0], paths[2])
+
+    # A mark belongs to the displayed image even when both thumbnails are selected.
+    QTest.keyClick(view, Qt.Key.Key_F)
+    finish_read(app, window)
+    assert window.files == [paths[0]] and window.current_path == paths[0]
+    QTest.keyClick(view, Qt.Key.Key_F)
+    assert window.files == [] and window.current_path is None
+    assert window.state_title.text() == "还没有星标照片"
+    assert not window.favorite_button.isEnabled()
+    QTest.mouseClick(window.favorite_filter, Qt.MouseButton.LeftButton)
+    finish_read(app, window)
+    assert window.files == paths and window.current_path == paths[1]
+    assert not window.favorite_button.isChecked()
+    window._apply_settings(AppSettings(keep_zoom_position=True))
+    window.canvas.set_zoom(2)
+    window.favorite_filter.click()
+    assert window.current_path is None
+    window.favorite_filter.click()
+    finish_read(app, window)
+    assert window.current_path == paths[1] and window.canvas.zoom() == 2
+
+
+def test_filtered_rename_refresh_and_explicit_open(app, window, tmp_path, monkeypatch):
+    first, last = [tmp_path / name for name in ("a.png", "c.png")]
+    for path in (first, last):
+        Image.new("RGB", (8, 8)).save(path)
+    window.open_file(first)
+    finish_read(app, window)
+    window.favorite_button.click()
+    window.favorite_filter.click()
+    monkeypatch.setattr("hifine.viewer.show_file_menu", lambda *args: True)
+    window._show_file_menu([first], QPoint())
+    renamed = tmp_path / "b.png"
+    first.rename(renamed)
+    wait_until(app, lambda: window._displayed_path == renamed)
+    assert window.files == [renamed] and window.favorite_button.isChecked()
+    window.open_file(last)
+    finish_read(app, window)
+    assert not window.favorite_filter.isChecked()
+    assert window.files == [renamed, last] and window.current_path == last
+    window.favorite_filter.click()
+    finish_read(app, window)
+    assert window.current_path == renamed and window.files == [renamed]
+
+
+def test_pending_navigation_cannot_star_the_wrong_photo(app, window, blocked_prefetch):
+    slow, release, _ = blocked_prefetch
+    previous = window.current_path
+    window.navigate(1)
+    assert window.current_path == slow and window._displayed_path == previous
+    QTest.keyClick(window.thumbnail_list, Qt.Key.Key_F)
+    assert not window._favorites
+    release.set()
+    finish_read(app, window)
+    QTest.keyClick(window.thumbnail_list, Qt.Key.Key_F)
+    assert window._favorites == {slow}
+
+
+def test_cut_to_another_folder_keeps_star_on_actual_destination(app, window, tmp_path):
+    photo = tmp_path / "photo.png"
+    folder = tmp_path / "精选"
+    folder.mkdir()
+    existing = folder / photo.name
+    for path in (photo, existing):
+        Image.new("RGB", (8, 8)).save(path)
+    window.open_file(photo)
+    finish_read(app, window)
+    window.favorite_button.click()
+    window.copy_files([photo], cut=True)
+    window.open_file(existing)
+    finish_read(app, window)
+    window.favorite_filter.click()
+    assert not window.files
+    window.paste_files()
+    moved = folder / "photo (2).png"
+    wait_until(app, lambda: window._displayed_path == moved)
+    assert window.files == [moved] and window.favorite_button.isChecked()
+    assert window._favorite_store.in_folder(tmp_path) == set()
+
+
+def test_rename_starred_thumbnail_while_viewing_another_photo(app, window, tmp_path, monkeypatch):
+    first, second, other = [tmp_path / name for name in ("a.png", "b.png", "c.png")]
+    for photo in (first, second, other):
+        Image.new("RGB", (32, 16)).save(photo)
+    window.open_file(second)
+    finish_read(app, window)
+    window.favorite_button.click()
+    window.navigate(-1)
+    finish_read(app, window)
+    window.favorite_button.click()
+    window.favorite_filter.click()
+    assert window.current_path == first and window.files == [first, second]
+
+    monkeypatch.setattr("hifine.viewer.show_file_menu", lambda *args: True)
+    view = window.thumbnail_list
+    request_menu(app, view.viewport(), view.visualRect(view.model().index(1, 0)).center())
+    assert view.selected_paths() == [second] and window.current_path == first
+    renamed = tmp_path / "renamed.png"
+    second.rename(renamed)
+    wait_until(app, lambda: renamed in window._folder_files)
+    assert window._displayed_path == first and window.current_path == first
+    assert window.files == [first, renamed] and view.selected_paths() == [renamed]
+    assert window._favorite_store.in_folder(tmp_path) == {first, renamed}
+    assert other not in {Path(p) for p in window._menu_watch.files()}
 
 
 def test_open_sample_shows_three_bundled_thumbnails(app, window):

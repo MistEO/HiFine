@@ -15,6 +15,7 @@ from .imaging import make_thumbnail
 
 
 _PREVIEW_SIZE = 320
+_FAVORITE_ROLE = Qt.ItemDataRole.UserRole + 1
 
 
 class _ThumbnailModel(QAbstractListModel):
@@ -22,12 +23,22 @@ class _ThumbnailModel(QAbstractListModel):
         super().__init__(parent)
         self.files = []
         self.images = OrderedDict()
+        self.favorites = set()
 
     def set_files(self, files):
         self.beginResetModel()
         self.files = list(files)
         self.images.clear()
         self.endResetModel()
+
+    def set_favorites(self, paths):
+        paths = set(paths)
+        if paths == self.favorites:
+            return
+        self.favorites = paths
+        if self.files:
+            self.dataChanged.emit(self.index(0), self.index(len(self.files) - 1),
+                                  [_FAVORITE_ROLE, Qt.ItemDataRole.ToolTipRole, Qt.ItemDataRole.AccessibleTextRole])
 
     def rowCount(self, parent=QModelIndex()):
         return 0 if parent.isValid() else len(self.files)
@@ -36,8 +47,13 @@ class _ThumbnailModel(QAbstractListModel):
         if not index.isValid():
             return None
         row = index.row()
-        if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ToolTipRole):
+        if role == Qt.ItemDataRole.DisplayRole:
             return self.files[row].name
+        if role == _FAVORITE_ROLE:
+            return self.files[row] in self.favorites
+        if role in (Qt.ItemDataRole.ToolTipRole, Qt.ItemDataRole.AccessibleTextRole):
+            path = self.files[row]
+            return f"{path.name} · 已加星标" if path in self.favorites else path.name
         if role == Qt.ItemDataRole.DecorationRole and row in self.images:
             self.images.move_to_end(row)
             return self.images[row][0]
@@ -57,6 +73,7 @@ class _ThumbnailDelegate(QStyledItemDelegate):
     def __init__(self, parent):
         super().__init__(parent)
         self._placeholder = glyph("image", "#726f6b")
+        self._star = glyph("star-filled", "#efb775")
 
     def sizeHint(self, option, index):
         return QSize(1, 110)
@@ -90,9 +107,19 @@ class _ThumbnailDelegate(QStyledItemDelegate):
             self._placeholder.paint(painter, icon)
 
         label = QRect(frame.left(), frame.bottom() + 2, frame.width(), 20)
-        text = option.fontMetrics.elidedText(index.data(), Qt.TextElideMode.ElideMiddle, label.width())
+        starred = index.data(_FAVORITE_ROLE)
+        star_space = 18 if starred else 0
+        text = option.fontMetrics.elidedText(index.data(), Qt.TextElideMode.ElideMiddle,
+                                             max(0, label.width() - star_space))
+        alignment = Qt.AlignmentFlag.AlignCenter
+        if starred:
+            width = option.fontMetrics.horizontalAdvance(text) + star_space
+            left = label.left() + max(0, (label.width() - width) // 2)
+            self._star.paint(painter, QRect(left, label.top() + 3, 14, 14))
+            label.setLeft(left + star_space)
+            alignment = Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
         painter.setPen(QColor("#ffdbb6" if selected else "#c5c2bd"))
-        painter.drawText(label, Qt.AlignmentFlag.AlignCenter, text)
+        painter.drawText(label, alignment, text)
         painter.restore()
 
 
@@ -162,6 +189,9 @@ class ThumbnailList(QListView):
         self._source_row = -1
         self._source_frame = None
         self._model.set_files(files)
+
+    def set_favorites(self, paths):
+        self._model.set_favorites(paths)
 
     def sync_current(self, row, frame):
         """Refresh a changed file's preview from the frame the viewer actually read."""

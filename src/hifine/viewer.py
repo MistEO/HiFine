@@ -9,11 +9,12 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QColorSpace, QDesktopServices, QGuiApplication, QImage, QKeySequence, QMovie, QShortcut, QTransform
 from PySide6.QtWidgets import (
     QApplication, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
-    QMessageBox, QPushButton, QStackedWidget, QVBoxLayout, QWidget,
+    QMessageBox, QPushButton, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget,
 )
 
 from .canvas import ImageCanvas
 from .controls import ElidedLabel, InfoPanel, divider, glyph, thumbnail_shortcut_button, tool_button
+from .favorites import FavoriteStore
 from .file_clipboard import finish_file_paste, read_file_clipboard, transfer_files, write_file_clipboard
 from .file_menu import reveal_files, show_file_menu
 from .image_cache import image_version
@@ -47,6 +48,9 @@ QToolButton, QPushButton { background: transparent; color: #e5e1da; border: 1px 
 QToolButton:hover, QPushButton:hover { background: #38383a; }
 QToolButton:pressed, QPushButton:pressed { background: #454443; }
 QToolButton:checked { background: #42362c; border-color: #624b37; }
+QWidget#thumbnailSidebar { background: #232426; }
+QToolButton#favoriteFilter { border-right: 1px solid #38383a; border-bottom: 1px solid #38383a;
+    border-radius: 0; }
 QToolButton#thumbnailHint { background: #232426; color: #e1c9b1; font-size: 12px;
     border: none; border-top: 1px solid #38383a; border-right: 1px solid #38383a;
     border-radius: 0; padding: 3px 10px 3px 1px; }
@@ -93,7 +97,7 @@ def _open_movie(path, parent):
 class MainWindow(QMainWindow):
     _file_operation_finished = Signal(object, object, object, str)
 
-    def __init__(self, sample_path=None, *, settings_store=None):
+    def __init__(self, sample_path=None, *, settings_store=None, favorite_store=None):
         super().__init__()
         self.setWindowTitle("HiFine")
         self.setAcceptDrops(True)
@@ -105,6 +109,10 @@ class MainWindow(QMainWindow):
         self.sample_path = Path(sample_path).absolute() if sample_path else None
         self.current_path = None
         self._folder = None
+        self._folder_files = []
+        self._favorite_store = favorite_store if favorite_store is not None else FavoriteStore()
+        self._favorites = set()
+        self._filter_origin = None
         self.files = []
         self._index = -1
         self._direction = 1
@@ -206,9 +214,15 @@ class MainWindow(QMainWindow):
         self.thumbnail_list.file_menu_requested.connect(self._show_file_menu)
         QApplication.instance().aboutToQuit.connect(self.thumbnail_list.shutdown)
         self.thumbnail_sidebar = QWidget()
+        self.thumbnail_sidebar.setObjectName("thumbnailSidebar")
         sidebar = QVBoxLayout(self.thumbnail_sidebar)
         sidebar.setContentsMargins(0, 0, 0, 0)
         sidebar.setSpacing(0)
+        self.favorite_filter = tool_button("filter", "只显示当前文件夹中加过星标的照片",
+                                           self._filter_favorites, text="只看星标", checkable=True)
+        self.favorite_filter.setObjectName("favoriteFilter")
+        self.favorite_filter.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        sidebar.addWidget(self.favorite_filter)
         sidebar.addWidget(self.thumbnail_list, 1)
         body.addWidget(self.thumbnail_sidebar)
         self.stage = QStackedWidget()
@@ -272,6 +286,10 @@ class MainWindow(QMainWindow):
         bottom.addSpacing(9)
         self.filename = ElidedLabel("filename")
         bottom.addWidget(self.filename, 1)
+        self.favorite_button = tool_button("star", "加星标（F）", self._toggle_favorite, checkable=True)
+        self.favorite_button.setFocusProxy(self.canvas)
+        self._favorite_icons = (self.favorite_button.icon(), glyph("star-filled", "#f0b47b"))
+        bottom.addWidget(self.favorite_button)
         self.play_button = tool_button("pause", "暂停动图（空格）", self._toggle_play)
         self.play_button.hide()
         bottom.addWidget(self.play_button)
@@ -319,6 +337,8 @@ class MainWindow(QMainWindow):
         ):
             shortcut = add(key, callback, view)
             hints.append((label, shortcut.key().toString(QKeySequence.SequenceFormat.NativeText)))
+        add("F", self.favorite_button.click).setAutoRepeat(False)
+        hints.append(("切换当前照片星标", "F"))
         self.thumbnail_hint = thumbnail_shortcut_button(view, hints)
         self.thumbnail_sidebar.layout().addWidget(self.thumbnail_hint)
 
@@ -411,7 +431,51 @@ class MainWindow(QMainWindow):
         self.state_button.setVisible(open_button)
         self.stage.setCurrentWidget(self.state)
         self._displayed_path = None
+        self._update_favorite_button()
         self._set_zoom_enabled(False)
+
+    def _load_favorites(self):
+        try:
+            self._favorites = self._favorite_store.in_folder(self._folder)
+        except OSError as exc:
+            self.statusBar().showMessage(f"无法读取星标：{exc}", 5000)
+        self.thumbnail_list.set_favorites(self._favorites)
+
+    def _update_favorite_button(self):
+        path = self._displayed_path
+        marked = path in self._favorites
+        button = self.favorite_button
+        button.setEnabled(path is not None and path == self.current_path)
+        button.setChecked(marked)
+        button.setIcon(self._favorite_icons[marked])
+        label = "取消星标（F）" if marked else "加星标（F）"
+        button.setToolTip(label)
+        button.setAccessibleName(label)
+
+    def _toggle_favorite(self, marked):
+        path = self._displayed_path
+        if path is None or path != self.current_path:
+            return
+        try:
+            self._favorite_store.set_favorite(path, marked)
+        except OSError as exc:
+            self.statusBar().showMessage(f"无法保存星标：{exc}", 5000)
+        else:
+            if marked:
+                self._favorites.add(path)
+            else:
+                self._favorites.discard(path)
+            self.thumbnail_list.set_favorites(self._favorites)
+            if self.favorite_filter.isChecked():
+                self._apply_visible_files(path)
+        self._update_favorite_button()
+
+    def _filter_favorites(self, enabled):
+        if enabled:
+            self._filter_origin = self.current_path
+            self._load_favorites()
+        self._apply_visible_files(self.current_path or self._filter_origin)
+        self.thumbnail_list.setFocus()
 
     def _set_zoom_enabled(self, enabled):
         for button in (self.zoom_button, self.fit_button, self.minus_button, self.plus_button):
@@ -438,11 +502,25 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("请先打开目标文件夹中的一张照片，再粘贴。", 5000)
             return
 
+        def paste():
+            result = transfer_files(snapshot, folder)
+            if snapshot.cut and result.pasted:
+                try:
+                    self._favorite_store.move_stars(result.pasted)
+                except OSError as exc:
+                    result.errors.append(f"图片已移动，无法更新星标：{exc}")
+            return result
+
         def finish(result):
             finish_file_paste(QApplication.clipboard(), snapshot, result)
+            if snapshot.cut and result.pasted and folder == self._folder:
+                self._load_favorites()
+                if self.favorite_filter.isChecked():
+                    self._apply_visible_files(self.current_path or self._filter_origin)
+                self._update_favorite_button()
             return f"已粘贴 {len(result.destinations)} 张图片", result.errors
 
-        self._run_file_operation(folder, "正在粘贴图片…", lambda: transfer_files(snapshot, folder), finish)
+        self._run_file_operation(folder, "正在粘贴图片…", paste, finish)
 
     def trash_files(self, paths):
         if self._file_busy or not paths:
@@ -545,10 +623,10 @@ class MainWindow(QMainWindow):
             self._menu_watch.addPaths(new_watches)
 
     def _rescan_menu_folder(self):
-        path = self.current_path or next(iter(self._menu_versions), None)
+        path = self.current_path or next(iter(self._menu_versions), None) or next(iter(self._folder_files), None)
         if path is not None:
             self._menu_scan = self._reads.rescan_folder(
-                path, self._menu_versions.get(path), self.files)
+                path, self._menu_versions, self._folder_files)
 
     def _menu_folder_rescanned(self, request, files, renamed):
         if request is not self._menu_scan or self._menu_refresh.isActive():
@@ -561,42 +639,64 @@ class MainWindow(QMainWindow):
         # A replacement can arrive as a single directory change. Recheck the
         # menu targets even if Qt still lists their file watches.
         self._check_menu_files(self._menu_versions.keys() & known)
-        if len(files) == len(self.files) and all(old.name == new.name for old, new in zip(self.files, files)):
+        if len(files) == len(self._folder_files) and all(
+                old.name == new.name for old, new in zip(self._folder_files, files)):
             return
-        original_path, version = request
-        selection = set(self.thumbnail_list.selected_paths())
-        keep_empty_selection = bool(self.files) and not selection
+        original_path, versions = request
+        selection = {renamed.get(path, path) for path in self.thumbnail_list.selected_paths()}
+        selected = self.current_path or original_path
+        selected = renamed.get(selected, selected)
+        if renamed:
+            for old, new in renamed.items():
+                self._menu_versions.pop(old, None)
+                self._menu_versions[new] = versions[old]
+            try:
+                self._favorite_store.move_stars(renamed)
+            except OSError as exc:
+                self.statusBar().showMessage(f"无法更新星标文件名：{exc}", 5000)
+            self._check_menu_files(renamed.values())
+            self._load_favorites()
+        self._menu_versions = {path: version for path, version in self._menu_versions.items() if path in known}
+        if not files:
+            # Keep watching even when an editor temporarily removes the only image.
+            self._menu_versions = versions or {original_path: None}
+        self._folder_files = files
+        self._apply_visible_files(selected, selection)
+
+    def _apply_visible_files(self, selected, selection=None):
+        previous_files = self.files
+        files = self._folder_files
+        if self.favorite_filter.isChecked():
+            files = [path for path in files if path in self._favorites]
         self.files = files
         self.thumbnail_list.set_files(files)
         if not files:
-            # An editor can leave the folder empty between removing the only
-            # image and saving its replacement. Keep watching the directory.
-            self._menu_versions = {original_path: version}
             self._reads.reset()
             self._loading_hint.stop()
             self._stop_animation()
             self._index = -1
             self.current_path = None
-            self.canvas.set_image(QImage())
+            self.canvas.set_image(QImage(), keep_view=bool(self._folder_files) and self._settings.keep_zoom_position)
             self.info_panel.set_details(None, {})
             self.filename.set_full_text("")
             self.filename.setToolTip("")
             self.setWindowTitle("HiFine")
-            self._show_state("文件夹中没有图片", open_button=True)
+            if self.favorite_filter.isChecked() and self._folder_files:
+                self._show_state("还没有星标照片", "点「只看星标」返回全部照片，按 F 给喜欢的照片加星标。")
+            else:
+                self._show_state("文件夹中没有图片", open_button=True)
             self._update_navigation()
             return
 
-        selected = self.current_path or original_path
-        if renamed:
-            self._menu_versions[renamed] = version
-            self._menu_watch.addPath(str(renamed))
-            if selected == original_path:
-                selected = renamed
-            if original_path in selection:
-                selection.remove(original_path)
-                selection.add(renamed)
-        self._menu_versions = {path: version for path, version in self._menu_versions.items() if path in known}
-        self._index = files.index(selected) if selected in known else min(max(self._index, 0), len(files) - 1)
+        if selected in files:
+            self._index = files.index(selected)
+        elif selected in self._folder_files:
+            # When filtering or removing a star, prefer the next marked shot.
+            next_path = next((p for p in self._folder_files[self._folder_files.index(selected) + 1:]
+                              if p in self._favorites), files[-1])
+            self._index = files.index(next_path)
+        else:
+            self._index = min(max(self._index, 0), len(files) - 1)
         path = files[self._index]
         loading = self._reads.loading
         if loading:
@@ -607,7 +707,7 @@ class MainWindow(QMainWindow):
             self.current_path = path
             self._update_navigation()
             self._reads.set_neighbors(self._neighbors())
-        if selection & known or keep_empty_selection:
+        if selection is not None and (selection.intersection(files) or (previous_files and not selection)):
             self.thumbnail_list.set_selected_paths(selection)
 
     def _clear_menu_watch(self):
@@ -635,11 +735,16 @@ class MainWindow(QMainWindow):
         return self.sample_path is not None and self.sample_path.parent == path.parent
 
     def open_file(self, path):
-        path = Path(path).expanduser().absolute()
+        path = Path(os.path.abspath(Path(path).expanduser()))
         self._menu_scan = None
         if self._folder != path.parent:
             self._clear_menu_watch()
         self._folder = path.parent
+        self._folder_files = []
+        self._filter_origin = None
+        self.favorite_filter.setChecked(False)
+        self._favorites = set()
+        self._load_favorites()
         self.thumbnail_list.set_files([])
         self.thumbnail_list.setFocus()
         self.files = [path]
@@ -692,6 +797,7 @@ class MainWindow(QMainWindow):
         keep_view = self._settings.keep_zoom_position and siblings is None
         self._show_path(path)
         if siblings is not None:
+            self._folder_files = siblings
             self.files = siblings
             self._index = self.files.index(path)
             self.thumbnail_list.set_files(siblings)
@@ -706,6 +812,7 @@ class MainWindow(QMainWindow):
         else:
             self.stage.setCurrentWidget(self.canvas)
             self._displayed_path = path
+            self._update_favorite_button()
             self.canvas.set_image(frame.image, keep_view=keep_view)
             self._set_zoom_enabled(True)
             if details.get("animated"):
@@ -780,6 +887,8 @@ class MainWindow(QMainWindow):
 
     def _update_navigation(self):
         self.thumbnail_list.select_row(self._index)
+        self.favorite_filter.setEnabled(bool(self._folder_files) or self.favorite_filter.isChecked())
+        self._update_favorite_button()
         self.reveal_button.setEnabled(self.current_path is not None)
         self.prev_button.setEnabled(self._index > 0)
         self.next_button.setEnabled(0 <= self._index < len(self.files) - 1)

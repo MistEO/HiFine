@@ -1,5 +1,6 @@
 """Background image reads and bounded lookahead for the current folder."""
 
+from collections import defaultdict
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal, Slot
@@ -7,6 +8,26 @@ from PySide6.QtGui import QImage
 
 from .image_cache import DecodedImage, ImageCache, image_version
 from .imaging import SUPPORTED_EXTENSIONS, list_images, load_image
+
+
+def _renamed_menu_files(versions, known_names, files):
+    # Menu targets have file IDs recorded before the file manager acts. Compare
+    # only disappeared and newly listed names, including case-only changes.
+    listed_names = {path.name for path in files}
+    missing = defaultdict(list)
+    for path, version in versions.items():
+        if version and version[1] and path.name not in listed_names:
+            missing[version[:2]].append(path)
+    if not missing:
+        return {}
+    added = defaultdict(list)
+    for path in files:
+        if path.name not in known_names:
+            version = image_version(path)
+            if version and version[:2] in missing:
+                added[version[:2]].append(path)
+    # Hard links can share an ID. Require an unambiguous match in both directions.
+    return {missing[key][0]: new[0] for key, new in added.items() if len(missing[key]) == len(new) == 1}
 
 
 def _decode(path: Path, cached: DecodedImage | None, max_pixel_bytes: int | None) -> DecodedImage:
@@ -96,9 +117,10 @@ class ImageReader(QObject):
         self._cache.set_limits(max_entries=max_entries, max_bytes=max_bytes)
         self.set_neighbors(self._neighbors)
 
-    def rescan_folder(self, path, version, known_files):
-        request = (path, version)
-        known = set(known_files)
+    def rescan_folder(self, path, menu_versions, known_files):
+        versions = dict(menu_versions)
+        request = (path, versions)
+        known_names = {p.name for p in known_files}
 
         def scan():
             try:
@@ -109,16 +131,7 @@ class ImageReader(QObject):
                 files = []
             except OSError:
                 return
-            # A rename preserves the file ID. Only newly listed names could
-            # be the missing file, even in a folder containing hard links.
-            renamed = None
-            if path not in files and version is not None and version[1]:
-                for candidate in files:
-                    if candidate not in known:
-                        candidate_version = image_version(candidate)
-                        if candidate_version and candidate_version[:2] == version[:2]:
-                            renamed = candidate
-                            break
+            renamed = _renamed_menu_files(versions, known_names, files)
             self.folder_rescanned.emit(request, files, renamed)
 
         self._pool.start(scan)

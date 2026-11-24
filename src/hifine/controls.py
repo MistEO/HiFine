@@ -32,6 +32,16 @@ def glyph(name, color="#cfccc6"):
         elif name == "panel":
             painter.drawRoundedRect(QRectF(3, 4, 18, 16), 2, 2)
             line((15, 5), (15, 19))
+        elif name in ("star", "star-filled"):
+            if name == "star-filled":
+                painter.setBrush(QColor(ink))
+            painter.drawPolygon(QPolygonF([QPointF(x, y) for x, y in (
+                (12, 2.5), (15, 8.7), (22, 9.7), (17, 14.6), (18.2, 21.5),
+                (12, 18.2), (5.8, 21.5), (7, 14.6), (2, 9.7), (9, 8.7),
+            )]))
+        elif name == "filter":
+            for y, left, right in ((6, 3, 21), (12, 6.5, 17.5), (18, 10, 14)):
+                line((left, y), (right, y))
         elif name == "fullscreen":
             line((9, 4), (4, 4), (4, 9))
             line((15, 4), (20, 4), (20, 9))
