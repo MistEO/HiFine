@@ -93,18 +93,16 @@ class SettingsDialog(QDialog):
 
         row = QHBoxLayout()
         self.mirrorchyan_cdk = QLineEdit()
+        self.mirrorchyan_cdk.setAccessibleName("Mirror 酱 CDK")
         self.mirrorchyan_cdk.setEchoMode(QLineEdit.EchoMode.Password)
-        self.mirrorchyan_cdk.setPlaceholderText("可留空")
         self.mirrorchyan_cdk.setText(self._settings.mirrorchyan_cdk)
-        label = QLabel("Mirror 酱 CDK")
+        label = QLabel('<a style="color: #f1bc86" href="https://mirrorchyan.com/zh?source=HiFine-settings">'
+                       'Mirror 酱</a> CDK')
+        label.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        label.setOpenExternalLinks(True)
         label.setBuddy(self.mirrorchyan_cdk)
         row.addWidget(label)
         row.addWidget(self.mirrorchyan_cdk, 1)
-        link = QLabel('<a style="color: #f1bc86" '
-                      'href="https://mirrorchyan.com/zh/projects?rid=HiFine&amp;source=hifine_settings">Mirror 酱</a>')
-        link.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
-        link.setOpenExternalLinks(True)
-        row.addWidget(link)
         layout.addLayout(row)
         return group
 

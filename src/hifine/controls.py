@@ -1,10 +1,12 @@
 """Small native controls used in HiFine's desktop viewer."""
 
+import sys
+
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
-    QFrame, QGridLayout, QHBoxLayout, QLabel, QScrollArea, QSizePolicy,
-    QToolButton, QVBoxLayout, QWidget,
+    QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QScrollArea, QSizePolicy,
+    QToolButton, QVBoxLayout, QWidget, QWidgetAction,
 )
 
 
@@ -83,6 +85,44 @@ def tool_button(name, title, callback, *, text="", checkable=False, color="#cfcc
         button.setText(text)
         button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
     button.clicked.connect(callback)
+    return button
+
+
+def thumbnail_shortcut_button(view, shortcuts):
+    click = "⌘ + 点击" if sys.platform == "darwin" else "Ctrl + 点击"
+    button = QToolButton(view.parentWidget())
+    button.setObjectName("thumbnailHint")
+    button.setText(f"{click}多选")
+    button.setToolTip("查看缩略图快捷键")
+    button.setAccessibleName(f"{click}多选，查看缩略图快捷键")
+    button.setCursor(Qt.CursorShape.PointingHandCursor)
+    button.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+    button.setFocusProxy(view)
+    button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+    button.setMinimumHeight(32)
+
+    menu = QMenu(button)
+    menu.setObjectName("thumbnailShortcutMenu")
+    menu.setAccessibleName("缩略图快捷键")
+    card = QWidget()
+    grid = QGridLayout(card)
+    grid.setContentsMargins(14, 12, 14, 12)
+    grid.setHorizontalSpacing(20)
+    grid.setVerticalSpacing(6)
+    title = QLabel("缩略图快捷键")
+    title.setObjectName("sectionTitle")
+    grid.addWidget(title, 0, 0, 1, 2)
+    rows = [("选中或取消单张", click), ("连续选择", "Shift + 点击"), *shortcuts]
+    for row, (description, keys) in enumerate(rows, start=1):
+        grid.addWidget(QLabel(description), row, 0)
+        keycap = QLabel(keys)
+        keycap.setObjectName("keyHint")
+        grid.addWidget(keycap, row, 1, Qt.AlignmentFlag.AlignRight)
+    action = QWidgetAction(menu)
+    action.setDefaultWidget(card)
+    menu.addAction(action)
+    button.setMenu(menu)
+    button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
     return button
 
 

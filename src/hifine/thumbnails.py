@@ -3,7 +3,7 @@
 from collections import OrderedDict
 
 from PySide6.QtCore import (
-    QAbstractListModel, QItemSelectionModel, QModelIndex, QObject, QPoint, QRect,
+    QAbstractListModel, QItemSelection, QItemSelectionModel, QModelIndex, QObject, QPoint, QRect,
     QRunnable, QSignalBlocker, QSize, Qt, QThreadPool, Signal, Slot,
 )
 from PySide6.QtGui import QColor, QContextMenuEvent, QImage, QPainter, QPen
@@ -144,7 +144,7 @@ class ThumbnailList(QListView):
                            " border-right: 1px solid #38383a; }")
         self.setUniformItemSizes(True)
         self.setMouseTracking(True)
-        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setSelectionMode(QListView.SelectionMode.ExtendedSelection)
         self.setEditTriggers(QListView.EditTrigger.NoEditTriggers)
         self.setVerticalScrollMode(QListView.ScrollMode.ScrollPerPixel)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -189,15 +189,22 @@ class ThumbnailList(QListView):
         index = self._model.index(row)
         if index != self.currentIndex():
             with QSignalBlocker(self):
-                self.setCurrentIndex(index)
+                self.selectionModel().setCurrentIndex(index, QItemSelectionModel.SelectionFlag.ClearAndSelect)
                 if index.isValid():
                     self.scrollTo(index)
 
-    def selectionCommand(self, index, event=None):
-        # Keep the displayed file selected even on Ctrl-clicks or empty space.
-        if index.isValid():
-            return QItemSelectionModel.SelectionFlag.ClearAndSelect
-        return QItemSelectionModel.SelectionFlag.NoUpdate
+    def selected_paths(self):
+        rows = sorted(index.row() for index in self.selectedIndexes())
+        return [self._model.files[row] for row in rows]
+
+    def set_selected_paths(self, paths):
+        paths = set(paths)
+        selection = QItemSelection()
+        for row, path in enumerate(self._model.files):
+            if path in paths:
+                index = self._model.index(row)
+                selection.select(index, index)
+        self.selectionModel().select(selection, QItemSelectionModel.SelectionFlag.ClearAndSelect)
 
     def _current_changed(self, current, previous):
         if current.isValid():
@@ -205,21 +212,30 @@ class ThumbnailList(QListView):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.RightButton:
+            self._select_context_index(self.indexAt(event.position().toPoint()))
             event.accept()
             return
         super().mousePressEvent(event)
 
+    def _select_context_index(self, index):
+        selection = self.selectionModel()
+        if index.isValid() and not selection.isSelected(index):
+            selection.select(index, QItemSelectionModel.SelectionFlag.ClearAndSelect)
+
     def contextMenuEvent(self, event):
         if event.reason() == QContextMenuEvent.Reason.Keyboard:
             index = self.currentIndex()
+            if not self.selectionModel().isSelected(index):
+                index = next(iter(self.selectedIndexes()), QModelIndex())
             position = self.viewport().mapToGlobal(self.visualRect(index).center())
         else:
             index = self.indexAt(event.pos())
+            self._select_context_index(index)
             position = event.globalPos()
         if not index.isValid():
             return super().contextMenuEvent(event)
         event.accept()
-        self.file_menu_requested.emit(self._model.files[index.row()], position)
+        self.file_menu_requested.emit(self.selected_paths(), position)
 
     def paintEvent(self, event):
         super().paintEvent(event)

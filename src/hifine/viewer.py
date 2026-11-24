@@ -3,7 +3,9 @@
 import os
 from pathlib import Path
 
-from PySide6.QtCore import QDir, QFile, QFileSystemWatcher, QSize, QStandardPaths, Qt, QTimer, QUrl, Slot
+from PySide6.QtCore import (
+    QDir, QFile, QFileSystemWatcher, QSize, QStandardPaths, Qt, QThreadPool, QTimer, QUrl, Signal, Slot,
+)
 from PySide6.QtGui import QColorSpace, QDesktopServices, QGuiApplication, QImage, QKeySequence, QMovie, QShortcut, QTransform
 from PySide6.QtWidgets import (
     QApplication, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
@@ -11,8 +13,9 @@ from PySide6.QtWidgets import (
 )
 
 from .canvas import ImageCanvas
-from .controls import ElidedLabel, InfoPanel, divider, glyph, tool_button
-from .file_menu import show_file_menu
+from .controls import ElidedLabel, InfoPanel, divider, glyph, thumbnail_shortcut_button, tool_button
+from .file_clipboard import finish_file_paste, read_file_clipboard, transfer_files, write_file_clipboard
+from .file_menu import reveal_files, show_file_menu
 from .image_cache import image_version
 from .imaging import SUPPORTED_EXTENSIONS
 from .reader import ImageReader
@@ -44,10 +47,21 @@ QToolButton, QPushButton { background: transparent; color: #e5e1da; border: 1px 
 QToolButton:hover, QPushButton:hover { background: #38383a; }
 QToolButton:pressed, QPushButton:pressed { background: #454443; }
 QToolButton:checked { background: #42362c; border-color: #624b37; }
-QToolButton#open, QPushButton#open { background: #f0b47b; color: #251c14; font-weight: 600;
+QToolButton#thumbnailHint { background: #232426; color: #e1c9b1; font-size: 12px;
+    border: none; border-top: 1px solid #38383a; border-right: 1px solid #38383a;
+    border-radius: 0; padding: 3px 10px 3px 1px; }
+QToolButton#thumbnailHint::menu-indicator { subcontrol-origin: padding; subcontrol-position: right center;
+    right: 3px; width: 6px; height: 6px; }
+QToolButton#thumbnailHint:hover, QToolButton#thumbnailHint:pressed { background: #39332e; }
+QMenu#thumbnailShortcutMenu { background: #292a2c; border: 1px solid #504e4c; }
+QToolButton#reveal, QPushButton#open { background: #f0b47b; color: #251c14; font-weight: 600;
     padding: 5px 12px; border: 1px solid #f1bd8b; }
-QToolButton#open:hover, QPushButton#open:hover { background: #fac58f; }
-QToolButton#open:pressed, QPushButton#open:pressed { background: #dea16a; }
+QToolButton#reveal { padding-right: 3.5em; }
+QToolButton#reveal QLabel#keyHint { color: #58381f; border-color: #b98151; }
+QToolButton#reveal QLabel#keyHint:disabled { color: #85827e; border-color: #555250; }
+QToolButton#reveal:hover, QPushButton#open:hover { background: #fac58f; }
+QToolButton#reveal:pressed, QPushButton#open:pressed { background: #dea16a; }
+QToolButton#reveal:disabled { background: #333436; border-color: #38383a; color: #85827e; }
 QPushButton#zoom { color: #e6e3dd; padding: 3px 5px; font-size: 12px; font-weight: 600; }
 QPushButton#zoom:disabled { color: #77736f; }
 QScrollBar:vertical { background: #232426; width: 6px; }
@@ -77,6 +91,8 @@ def _open_movie(path, parent):
 
 
 class MainWindow(QMainWindow):
+    _file_operation_finished = Signal(object, object, object, str)
+
     def __init__(self, sample_path=None, *, settings_store=None):
         super().__init__()
         self.setWindowTitle("HiFine")
@@ -88,6 +104,7 @@ class MainWindow(QMainWindow):
                     min(800, int(available.height() * 0.90)))
         self.sample_path = Path(sample_path).absolute() if sample_path else None
         self.current_path = None
+        self._folder = None
         self.files = []
         self._index = -1
         self._direction = 1
@@ -104,6 +121,9 @@ class MainWindow(QMainWindow):
         self._menu_watch.directoryChanged.connect(lambda _: self._menu_refresh.start())
         self._menu_versions = {}
         self._menu_scan = None
+        self._file_busy = False
+        self._close_after_operation = False
+        self._file_operation_finished.connect(self._finish_file_operation)
         QApplication.instance().aboutToQuit.connect(self._reads.shutdown)
         self._movie = None
         self._movie_orientation = 1
@@ -115,6 +135,11 @@ class MainWindow(QMainWindow):
         self._displayed_path = None
         self._setup_view()
         self._setup_shortcuts()
+        bar = self.statusBar()
+        bar.setSizeGripEnabled(False)
+        bar.setStyleSheet("QStatusBar { background: #232426; color: #f1bc86; padding-left: 12px; }")
+        bar.hide()
+        bar.messageChanged.connect(lambda text: bar.setVisible(bool(text)))
         self._show_state("打开一张图片", "也可以将图片拖到这里。", open_button=True)
         self._update_navigation()
 
@@ -147,11 +172,16 @@ class MainWindow(QMainWindow):
         top.addSpacing(9)
         self.location = ElidedLabel("location")
         top.addWidget(self.location, 1)
-        self.open_button = tool_button("folder", "打开图片", self.choose_file,
-                                       text="打开图片", color="#342519")
-        self.open_button.setObjectName("open")
-        self.open_button.setToolTip(f"打开图片（{QKeySequence(QKeySequence.StandardKey.Open).toString(QKeySequence.SequenceFormat.NativeText)}）")
-        top.addWidget(self.open_button)
+        self.reveal_button = tool_button("folder", "在文件管理器中显示当前图片（回车键）",
+                                         self._reveal_current_file, text="打开文件位置", color="#342519")
+        self.reveal_button.setObjectName("reveal")
+        enter_hint = QLabel("Enter")
+        enter_hint.setObjectName("keyHint")
+        enter_hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        hint_layout = QHBoxLayout(self.reveal_button)
+        hint_layout.setContentsMargins(0, 0, 9, 0)
+        hint_layout.addWidget(enter_hint, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        top.addWidget(self.reveal_button)
         top.addSpacing(5)
         self.info_button = tool_button("panel", "查看或隐藏照片信息（Tab）",
                                        self._set_info, checkable=True)
@@ -160,7 +190,7 @@ class MainWindow(QMainWindow):
         self.full_button = tool_button("fullscreen", "进入或退出全屏（F11）",
                                        self._toggle_fullscreen, checkable=True)
         top.addWidget(self.full_button)
-        self.settings_button = tool_button("settings", "设置", self.show_settings, text="设置")
+        self.settings_button = tool_button("settings", "设置", self.show_settings)
         settings_key = QKeySequence("Ctrl+,")
         self.settings_button.setShortcut(settings_key)
         self.settings_button.setToolTip(f"设置（{settings_key.toString(QKeySequence.SequenceFormat.NativeText)}）")
@@ -175,10 +205,15 @@ class MainWindow(QMainWindow):
         self.thumbnail_list.row_requested.connect(self._go_to)
         self.thumbnail_list.file_menu_requested.connect(self._show_file_menu)
         QApplication.instance().aboutToQuit.connect(self.thumbnail_list.shutdown)
-        body.addWidget(self.thumbnail_list)
+        self.thumbnail_sidebar = QWidget()
+        sidebar = QVBoxLayout(self.thumbnail_sidebar)
+        sidebar.setContentsMargins(0, 0, 0, 0)
+        sidebar.setSpacing(0)
+        sidebar.addWidget(self.thumbnail_list, 1)
+        body.addWidget(self.thumbnail_sidebar)
         self.stage = QStackedWidget()
         self.canvas = ImageCanvas()
-        self.canvas.file_menu_requested.connect(lambda pos: self._show_file_menu(self._displayed_path, pos))
+        self.canvas.file_menu_requested.connect(self._show_canvas_file_menu)
         self.stage.addWidget(self.canvas)
         self.state = QWidget()
         self.state.setObjectName("state")
@@ -222,13 +257,14 @@ class MainWindow(QMainWindow):
         bottom = QHBoxLayout(footer)
         bottom.setContentsMargins(13, 0, 17, 0)
         bottom.setSpacing(5)
-        self.prev_button = tool_button("left", "上一张（←）", lambda: self.navigate(-1))
-        self.next_button = tool_button("right", "下一张（→）", lambda: self.navigate(1))
+        self.prev_button = tool_button("left", "上一张（← / ↑）", lambda: self.navigate(-1))
+        self.next_button = tool_button("right", "下一张（→ / ↓）", lambda: self.navigate(1))
         bottom.addWidget(self.prev_button)
         self.position = QLabel()
         self.position.setObjectName("position")
         self.position.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.position.setMinimumWidth(40)
+        self.thumbnail_list.selectionModel().selectionChanged.connect(self._update_position)
         bottom.addWidget(self.position)
         bottom.addWidget(self.next_button)
         bottom.addSpacing(7)
@@ -263,14 +299,38 @@ class MainWindow(QMainWindow):
     def _setup_shortcuts(self):
         self._shortcuts = []
 
-        def add(sequence, callback):
-            shortcut = QShortcut(QKeySequence(sequence), self)
+        def add(sequence, callback, widget=None):
+            shortcut = QShortcut(QKeySequence(sequence), widget or self)
+            if widget is not None:
+                shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
             shortcut.activated.connect(callback)
             self._shortcuts.append(shortcut)
+            return shortcut
+
+        view = self.thumbnail_list
+        keys = QKeySequence.StandardKey
+        hints = []
+        for key, label, callback in (
+            (keys.SelectAll, "全选", view.selectAll),
+            (keys.Copy, "复制", lambda: self.copy_files(view.selected_paths())),
+            (keys.Cut, "剪切", lambda: self.copy_files(view.selected_paths(), cut=True)),
+            (keys.Paste, "粘贴到当前文件夹", self.paste_files),
+            (keys.Delete, "移到回收站", lambda: self.trash_files(view.selected_paths())),
+        ):
+            shortcut = add(key, callback, view)
+            hints.append((label, shortcut.key().toString(QKeySequence.SequenceFormat.NativeText)))
+        self.thumbnail_hint = thumbnail_shortcut_button(view, hints)
+        self.thumbnail_sidebar.layout().addWidget(self.thumbnail_hint)
 
         add(QKeySequence.StandardKey.Open, self.choose_file)
-        add("Left", lambda: self.navigate(-1))
-        add("Right", lambda: self.navigate(1))
+        reveal_shortcut = QShortcut(self.reveal_button)
+        reveal_shortcut.setKeys([QKeySequence("Return"), QKeySequence("Enter")])
+        reveal_shortcut.setAutoRepeat(False)
+        reveal_shortcut.activated.connect(self.reveal_button.click)
+        for key in ("Left", "Up"):
+            add(key, lambda: self.navigate(-1))
+        for key in ("Right", "Down"):
+            add(key, lambda: self.navigate(1))
         add("Tab", lambda: self.info_button.click())
         add("F11", self._toggle_fullscreen)
         add("Escape", self._leave_fullscreen)
@@ -302,12 +362,6 @@ class MainWindow(QMainWindow):
                                      max_bytes=settings.cache_max_mib * 1024**2)
 
     def start_update_check(self):
-        bar = self.statusBar()
-        bar.setSizeGripEnabled(False)
-        bar.setStyleSheet("QStatusBar { background: #232426; color: #f1bc86; padding-left: 12px; }")
-        bar.hide()
-        bar.messageChanged.connect(lambda text: bar.setVisible(bool(text)))
-
         self._updates = UpdateChecker(self)
         self._updates.notice.connect(self._show_update_notice)
         self._updates.installer_ready.connect(self._open_installer)
@@ -363,37 +417,132 @@ class MainWindow(QMainWindow):
         for button in (self.zoom_button, self.fit_button, self.minus_button, self.plus_button):
             button.setEnabled(enabled)
 
-    def _show_file_menu(self, path, position):
-        if path is None:
+    def copy_files(self, paths, *, cut=False):
+        if not paths:
             return
-        version = image_version(path)
-        if not show_file_menu(self, path, position):
+        write_file_clipboard(QApplication.clipboard(), paths, cut=cut)
+        if cut:
+            # A paste in the system file manager can remove these files later.
+            self._watch_folder()
+        verb = "剪切" if cut else "复制"
+        self.statusBar().showMessage(f"已{verb} {len(paths)} 张图片", 3000)
+
+    def paste_files(self):
+        if self._file_busy or self._folder is None:
             return
-        if self.current_path and path.parent == self.current_path.parent:
-            # Shell commands can finish after the menu closes, e.g. Explorer's rename editor.
-            if str(path.parent) not in self._menu_watch.directories():
-                self._menu_watch.addPath(str(path.parent))
-            self._menu_versions[path] = version
-            self._menu_file_changed(str(path))
+        snapshot = read_file_clipboard(QApplication.clipboard())
+        if snapshot is None:
+            return
+        folder = self._folder
+        if self.sample_path is not None and folder == self.sample_path.parent:
+            self.statusBar().showMessage("请先打开目标文件夹中的一张照片，再粘贴。", 5000)
+            return
+
+        def finish(result):
+            finish_file_paste(QApplication.clipboard(), snapshot, result)
+            return f"已粘贴 {len(result.destinations)} 张图片", result.errors
+
+        self._run_file_operation(folder, "正在粘贴图片…", lambda: transfer_files(snapshot, folder), finish)
+
+    def trash_files(self, paths):
+        if self._file_busy or not paths:
+            return
+        target = paths[0].name if len(paths) == 1 else f"选中的 {len(paths)} 张图片"
+        answer = QMessageBox.question(self, "移到回收站", f"将{target}移到回收站？",
+                                      QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                      QMessageBox.StandardButton.No)
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        def trash():
+            errors = []
+            for path in paths:
+                file = QFile(str(path))
+                if not path.is_file():
+                    errors.append(f"{path.name}：文件已不存在或不是普通文件")
+                elif not file.moveToTrash():
+                    errors.append(f"{path.name}：{file.errorString()}")
+            return errors
+
+        self._run_file_operation(paths[0].parent, "正在将图片移到回收站…", trash,
+                                 lambda errors: (f"已将 {len(paths) - len(errors)} 张图片移到回收站", errors))
+
+    def _run_file_operation(self, folder, message, work, finish):
+        self._file_busy = True
+        self.statusBar().showMessage(message)
+
+        def run():
+            try:
+                result = work()
+            except Exception as exc:
+                self._file_operation_finished.emit(folder, finish, None, str(exc))
+            else:
+                self._file_operation_finished.emit(folder, finish, result, "")
+
+        QThreadPool.globalInstance().start(run)
+
+    @Slot(object, object, object, str)
+    def _finish_file_operation(self, folder, finish, result, error):
+        self._file_busy = False
+        if folder == self._folder:
+            self._watch_folder()
+            self._menu_refresh.start()
+        message, errors = ("文件操作失败", [error]) if error else finish(result)
+        self.statusBar().showMessage(message, 5000)
+        if errors:
+            dialog = QMessageBox(QMessageBox.Icon.Warning, "文件操作", f"{len(errors)} 项操作失败\n{errors[0]}",
+                                 parent=self)
+            if len(errors) > 1:
+                dialog.setDetailedText("\n".join(errors))
+            dialog.exec()
+        if self._close_after_operation:
+            self.close()
+
+    def _watch_folder(self):
+        if self._folder is not None and str(self._folder) not in self._menu_watch.directories():
+            self._menu_watch.addPath(str(self._folder))
+
+    def _reveal_current_file(self):
+        if self.current_path is not None:
+            reveal_files(self, (self.current_path,))
+
+    def _show_canvas_file_menu(self, position):
+        if self._displayed_path is not None:
+            self._show_file_menu([self._displayed_path], position)
+
+    def _show_file_menu(self, paths, position):
+        versions = {path: image_version(path) for path in paths}
+        if show_file_menu(self, paths, position) and paths[0].parent == self._folder:
+            # Explorer may finish a rename, edit or move after its menu closes.
+            self._watch_folder()
+            self._menu_versions.update(versions)
+            self._check_menu_files(versions)
             self._menu_refresh.start()
 
     def _menu_file_changed(self, filename):
         path = Path(filename)
-        if path not in self._menu_versions:
-            return
-        previous = self._menu_versions[path]
-        version = image_version(path)
-        if version is None:
-            self._menu_refresh.start()
-            return
-        if filename not in self._menu_watch.files():
-            self._menu_watch.addPath(filename)
-        self._menu_versions[path] = version
-        if version != previous:
-            if path == self.current_path:
-                self._schedule_read(path, scan=False)
-            elif path in self.files:
-                self.thumbnail_list.invalidate_preview(self.files.index(path))
+        if path in self._menu_versions:
+            self._check_menu_files([path])
+
+    def _check_menu_files(self, paths):
+        watched = set(self._menu_watch.files())
+        new_watches = []
+        for path in paths:
+            previous = self._menu_versions[path]
+            version = image_version(path)
+            if version is None:
+                self._menu_refresh.start()
+                continue
+            if str(path) not in watched:
+                new_watches.append(str(path))
+            self._menu_versions[path] = version
+            if version != previous:
+                if path == self.current_path:
+                    self._schedule_read(path, scan=False)
+                elif path in self.files:
+                    self.thumbnail_list.invalidate_preview(self.files.index(path))
+        if new_watches:
+            self._menu_watch.addPaths(new_watches)
 
     def _rescan_menu_folder(self):
         path = self.current_path or next(iter(self._menu_versions), None)
@@ -411,12 +560,12 @@ class MainWindow(QMainWindow):
             self._menu_watch.removePaths(missing)
         # A replacement can arrive as a single directory change. Recheck the
         # menu targets even if Qt still lists their file watches.
-        for path in self._menu_versions:
-            if path in known:
-                self._menu_file_changed(str(path))
+        self._check_menu_files(self._menu_versions.keys() & known)
         if len(files) == len(self.files) and all(old.name == new.name for old, new in zip(self.files, files)):
             return
         original_path, version = request
+        selection = set(self.thumbnail_list.selected_paths())
+        keep_empty_selection = bool(self.files) and not selection
         self.files = files
         self.thumbnail_list.set_files(files)
         if not files:
@@ -443,6 +592,9 @@ class MainWindow(QMainWindow):
             self._menu_watch.addPath(str(renamed))
             if selected == original_path:
                 selected = renamed
+            if original_path in selection:
+                selection.remove(original_path)
+                selection.add(renamed)
         self._menu_versions = {path: version for path, version in self._menu_versions.items() if path in known}
         self._index = files.index(selected) if selected in known else min(max(self._index, 0), len(files) - 1)
         path = files[self._index]
@@ -455,6 +607,8 @@ class MainWindow(QMainWindow):
             self.current_path = path
             self._update_navigation()
             self._reads.set_neighbors(self._neighbors())
+        if selection & known or keep_empty_selection:
+            self.thumbnail_list.set_selected_paths(selection)
 
     def _clear_menu_watch(self):
         self._menu_scan = None
@@ -483,9 +637,11 @@ class MainWindow(QMainWindow):
     def open_file(self, path):
         path = Path(path).expanduser().absolute()
         self._menu_scan = None
-        if self.current_path is None or self.current_path.parent != path.parent:
+        if self._folder != path.parent:
             self._clear_menu_watch()
+        self._folder = path.parent
         self.thumbnail_list.set_files([])
+        self.thumbnail_list.setFocus()
         self.files = [path]
         self._index = 0
         self._direction = 1
@@ -554,6 +710,10 @@ class MainWindow(QMainWindow):
                 self._start_animation(path, details.get("animation_orientation", 1))
 
     def closeEvent(self, event):
+        if self._file_busy:
+            self._close_after_operation = True
+            event.ignore()
+            return
         if self._updates is not None:
             self._updates.stop()
         self._clear_menu_watch()
@@ -618,14 +778,23 @@ class MainWindow(QMainWindow):
 
     def _update_navigation(self):
         self.thumbnail_list.select_row(self._index)
+        self.reveal_button.setEnabled(self.current_path is not None)
         self.prev_button.setEnabled(self._index > 0)
         self.next_button.setEnabled(0 <= self._index < len(self.files) - 1)
-        self.position.setText(f"{self._index + 1} / {len(self.files)}" if self.files else "—")
+        self._update_position()
+
+    def _update_position(self):
+        text = f"{self._index + 1} / {len(self.files)}" if self.files else "—"
+        count = sum(span.height() for span in self.thumbnail_list.selectionModel().selection())
+        if count > 1:
+            text += f" · 已选 {count} 张 · 右键批量操作"
+        self.position.setText(text)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if hasattr(self, "info_panel"):
-            self.thumbnail_list.setFixedWidth(max(105, min(176, round(self.width() * 0.15))))
+        if hasattr(self, "thumbnail_hint"):
+            width = max(105, min(176, round(self.width() * 0.15)))
+            self.thumbnail_sidebar.setFixedWidth(max(width, self.thumbnail_hint.sizeHint().width()))
             self.info_panel.setFixedWidth(max(205, min(278, round(self.width() * 0.235))))
 
     def dragEnterEvent(self, event):
