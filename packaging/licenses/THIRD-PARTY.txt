@@ -40,4 +40,6 @@ Pillow's license file includes notices for its platform-specific bundled image
 libraries, in pillow-13.0.0.dist-info/licenses. The interpreter's license is
 in CPython/LICENSE.txt. The launcher and runtime hook terms, including the
 PyInstaller bootloader exception, are in pyinstaller-6.22.3.dist-info/licenses.
+The packaging library used to compare versions supplies its license texts
+in packaging-26.3.dist-info/licenses.
 The sample photograph's credit and source are in hifine/assets/NOTICE.txt.

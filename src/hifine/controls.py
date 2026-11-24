@@ -35,6 +35,11 @@ def glyph(name, color="#cfccc6"):
             line((15, 4), (20, 4), (20, 9))
             line((4, 15), (4, 20), (9, 20))
             line((20, 15), (20, 20), (15, 20))
+        elif name == "settings":
+            for y, knob in ((6, 9), (12, 16), (18, 9)):
+                line((3, y), (knob - 2, y))
+                painter.drawEllipse(QPointF(knob, y), 2, 2)
+                line((knob + 2, y), (21, y))
         elif name == "left":
             line((14, 6), (8, 12), (14, 18))
         elif name == "right":

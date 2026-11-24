@@ -26,6 +26,8 @@ VIAddVersionKey /LANG=1033 "LegalCopyright" "HiFine contributors"
 !define THUMBNAIL "{E357FCCD-A995-4576-B01F-234630154E96}"
 !define WINDOWS_PHOTO_THUMBNAIL "{C7657C4A-9F68-40FA-A4DF-96BC08EB3551}"
 
+!define MUI_WELCOMEPAGE_TEXT "$(CloseHiFine)"
+!insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_INSTFILES
 !define MUI_FINISHPAGE_RUN "$INSTDIR\HiFine.exe"
 !define MUI_FINISHPAGE_SHOWREADME
@@ -37,6 +39,8 @@ VIAddVersionKey /LANG=1033 "LegalCopyright" "HiFine contributors"
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "English"
 !insertmacro MUI_LANGUAGE "SimpChinese"
+LangString CloseHiFine ${LANG_ENGLISH} "Close any open HiFine windows before continuing with the installation."
+LangString CloseHiFine ${LANG_SIMPCHINESE} "如果 HiFine 正在运行，请先关闭所有 HiFine 窗口，再继续安装。"
 LangString SetDefault ${LANG_ENGLISH} "Choose file types for HiFine in Default apps"
 LangString SetDefault ${LANG_SIMPCHINESE} "在默认应用设置中选择用 HiFine 打开的图片格式"
 LangString NeedX64 ${LANG_ENGLISH} "This edition of HiFine requires an x64 Windows PC."

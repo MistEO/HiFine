@@ -7,6 +7,8 @@ from pathlib import Path
 
 from PySide6.QtGui import QImage
 
+from .settings import DEFAULT_CACHE_ENTRIES, DEFAULT_CACHE_MIB
+
 
 ImageVersion = tuple[int, int, int, int]
 
@@ -29,7 +31,8 @@ class DecodedImage:
 class ImageCache:
     """GUI-thread LRU of read-only decoded images."""
 
-    def __init__(self, max_bytes: int = 256 * 1024**2, max_entries: int = 8):
+    def __init__(self, max_bytes: int = DEFAULT_CACHE_MIB * 1024**2,
+                 max_entries: int = DEFAULT_CACHE_ENTRIES):
         self.max_bytes = max_bytes
         self.max_entries = max_entries
         self._frames: OrderedDict[Path, DecodedImage] = OrderedDict()
@@ -49,6 +52,17 @@ class ImageCache:
 
     def clear(self) -> None:
         self._frames.clear()
+
+    def set_limits(self, *, max_bytes: int, max_entries: int) -> None:
+        self.max_bytes = max_bytes
+        self.max_entries = max_entries
+        # An oversized recent frame cannot be kept, even if every older frame is evicted.
+        self._frames = OrderedDict((path, frame) for path, frame in self._frames.items()
+                                   if frame.image.sizeInBytes() <= max_bytes)
+        total = sum(frame.image.sizeInBytes() for frame in self._frames.values())
+        while self._frames and (len(self._frames) > max_entries or total > max_bytes):
+            _, oldest = self._frames.popitem(last=False)
+            total -= oldest.image.sizeInBytes()
 
     def available_bytes(self, protected: Collection[Path]) -> int:
         pinned = [self._frames[path] for path in protected if path in self._frames]

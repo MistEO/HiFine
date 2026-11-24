@@ -2,11 +2,11 @@
 
 from pathlib import Path
 
-from PySide6.QtCore import QDir, QFileSystemWatcher, QSize, QStandardPaths, Qt, QTimer, Slot
-from PySide6.QtGui import QColorSpace, QGuiApplication, QImage, QKeySequence, QMovie, QShortcut, QTransform
+from PySide6.QtCore import QDir, QFileSystemWatcher, QSize, QStandardPaths, Qt, QTimer, QUrl, Slot
+from PySide6.QtGui import QColorSpace, QDesktopServices, QGuiApplication, QImage, QKeySequence, QMovie, QShortcut, QTransform
 from PySide6.QtWidgets import (
-    QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
-    QPushButton, QStackedWidget, QVBoxLayout, QWidget,
+    QApplication, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
+    QMessageBox, QPushButton, QStackedWidget, QVBoxLayout, QWidget,
 )
 
 from .canvas import ImageCanvas
@@ -15,7 +15,10 @@ from .file_menu import show_file_menu
 from .image_cache import image_version
 from .imaging import SUPPORTED_EXTENSIONS
 from .reader import ImageReader
+from .settings import AppSettings
+from .settings_dialog import SettingsDialog
 from .thumbnails import ThumbnailList
+from .updates import UpdateChecker
 
 
 STYLE = """
@@ -54,7 +57,7 @@ QToolTip { background: #343436; color: #efeee9; border: 1px solid #595756; paddi
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, sample_path=None):
+    def __init__(self, sample_path=None, *, settings_store=None):
         super().__init__()
         self.setWindowTitle("HiFine")
         self.setAcceptDrops(True)
@@ -69,6 +72,9 @@ class MainWindow(QMainWindow):
         self._index = -1
         self._direction = 1
         self._reads = ImageReader(self)
+        self._settings_store = settings_store
+        self._updates = None
+        self._apply_settings(AppSettings.load(settings_store))
         self._reads.ready.connect(self._read_finished)
         self._reads.folder_rescanned.connect(self._menu_folder_rescanned)
         self._menu_watch = QFileSystemWatcher(self)
@@ -134,6 +140,11 @@ class MainWindow(QMainWindow):
         self.full_button = tool_button("fullscreen", "进入或退出全屏（F11）",
                                        self._toggle_fullscreen, checkable=True)
         top.addWidget(self.full_button)
+        self.settings_button = tool_button("settings", "设置", self.show_settings, text="设置")
+        settings_key = QKeySequence("Ctrl+,")
+        self.settings_button.setShortcut(settings_key)
+        self.settings_button.setToolTip(f"设置（{settings_key.toString(QKeySequence.SequenceFormat.NativeText)}）")
+        top.addWidget(self.settings_button)
         layout.addWidget(header)
         layout.addWidget(divider())
 
@@ -249,6 +260,50 @@ class MainWindow(QMainWindow):
         add("-", lambda: self.canvas.zoom_by(1 / 1.2))
         add("0", self.canvas.fit)
         add("1", lambda: self.canvas.set_zoom(1.0))
+
+    def show_settings(self):
+        dialog = SettingsDialog(self._settings, self)
+        while dialog.exec() == QDialog.DialogCode.Accepted:
+            settings = dialog.settings()
+            try:
+                settings.save(self._settings_store)
+            except OSError as exc:
+                QMessageBox.warning(self, "无法保存设置", str(exc))
+            else:
+                self._apply_settings(settings)
+                break
+        dialog.deleteLater()
+
+    def _apply_settings(self, settings):
+        if self._updates is not None and self._settings.mirrorchyan_cdk != settings.mirrorchyan_cdk:
+            self._updates.stop()
+        self._settings = settings
+        self._reads.set_cache_limits(max_entries=settings.cache_max_entries,
+                                     max_bytes=settings.cache_max_mib * 1024**2)
+
+    def start_update_check(self):
+        bar = self.statusBar()
+        bar.setSizeGripEnabled(False)
+        bar.setStyleSheet("QStatusBar { background: #232426; color: #f1bc86; padding-left: 12px; }")
+        bar.hide()
+        bar.messageChanged.connect(lambda text: bar.setVisible(bool(text)))
+
+        self._updates = UpdateChecker(self)
+        self._updates.notice.connect(self._show_update_notice)
+        self._updates.installer_ready.connect(self._open_installer)
+        QApplication.instance().aboutToQuit.connect(self._updates.stop)
+        self._updates.start(self._settings.mirrorchyan_cdk)
+
+    def _show_update_notice(self, message):
+        bar = self.statusBar()
+        bar.setToolTip(message)
+        bar.showMessage(message, 15_000)
+
+    def _open_installer(self, version, path):
+        if QDesktopServices.openUrl(QUrl.fromLocalFile(path)):
+            self._show_update_notice(f"HiFine v{version} 安装包已打开，请关闭 HiFine 后按提示安装。")
+        else:
+            self._show_update_notice(f"请手动打开已下载的安装包：{QDir.toNativeSeparators(path)}")
 
     def _set_info(self, visible):
         self.info_panel.setVisible(visible)
@@ -479,6 +534,8 @@ class MainWindow(QMainWindow):
                 self._start_animation(path, details.get("animation_orientation", 1))
 
     def closeEvent(self, event):
+        if self._updates is not None:
+            self._updates.stop()
         self._clear_menu_watch()
         self._loading_hint.stop()
         self._reads.reset()

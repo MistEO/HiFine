@@ -7,12 +7,13 @@ from types import SimpleNamespace
 
 from PIL import Image
 import pytest
-from PySide6.QtCore import QPoint, QPointF, Qt, QTimer
+from PySide6.QtCore import QPoint, QPointF, QSettings, Qt, QTimer
 from PySide6.QtGui import QContextMenuEvent, QImage, QMovie, QWheelEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QDialogButtonBox, QLineEdit
 
 from hifine import file_menu, reader
+from hifine.settings import AppSettings
 from hifine.viewer import MainWindow
 
 
@@ -23,8 +24,13 @@ def app():
 
 
 @pytest.fixture()
-def window(app):
-    widget = MainWindow()
+def settings_store(tmp_path):
+    return QSettings(str(tmp_path / "hifine.ini"), QSettings.Format.IniFormat)
+
+
+@pytest.fixture()
+def window(app, settings_store):
+    widget = MainWindow(settings_store=settings_store)
     widget.show()
     widget.activateWindow()
     app.processEvents()
@@ -54,6 +60,46 @@ def thumbnail_color(row):
 
 def request_menu(app, widget, point):
     app.sendEvent(widget, QContextMenuEvent(QContextMenuEvent.Reason.Mouse, point, widget.mapToGlobal(point)))
+
+
+def test_settings_save_cancel_and_reopen(app, window, settings_store, tmp_path):
+    photo = tmp_path / "photo.png"
+    Image.new("RGB", (32, 16), "red").save(photo)
+    window.open_file(photo)
+    finish_read(app, window)
+    window.canvas.set_zoom(2)
+    initial = []
+
+    def edit(entries, mib, cdk, button):
+        dialog = app.activeModalWidget()
+        initial.append((dialog.cache_max_entries.value(), dialog.cache_max_mib.value(),
+                        dialog.mirrorchyan_cdk.text(), dialog.mirrorchyan_cdk.echoMode()))
+        dialog.cache_max_entries.setValue(entries)
+        dialog.cache_max_mib.setValue(mib)
+        dialog.mirrorchyan_cdk.setText(cdk)
+        QTest.mouseClick(dialog.buttons.button(button), Qt.MouseButton.LeftButton)
+
+    buttons = QDialogButtonBox.StandardButton
+    QTimer.singleShot(0, lambda: edit(3, 64, " example-cdk ", buttons.Save))
+    QTest.mouseClick(window.settings_button, Qt.MouseButton.LeftButton)
+    assert AppSettings.load(settings_store) == AppSettings(3, 64, "example-cdk")
+    cache = window._reads._cache
+    assert (cache.max_entries, cache.max_bytes) == (3, 64 * 1024**2)
+    assert window.current_path == photo and window.canvas.zoom() == 2
+
+    QTimer.singleShot(0, lambda: edit(1, 1, "", buttons.Cancel))
+    QTest.mouseClick(window.settings_button, Qt.MouseButton.LeftButton)
+    masked = QLineEdit.EchoMode.Password
+    assert initial == [(8, 256, "", masked), (3, 64, "example-cdk", masked)]
+    assert (cache.max_entries, cache.max_bytes) == (3, 64 * 1024**2)
+
+    reopened = MainWindow(settings_store=QSettings(settings_store.fileName(), QSettings.Format.IniFormat))
+    try:
+        cache = reopened._reads._cache
+        assert (cache.max_entries, cache.max_bytes) == (3, 64 * 1024**2)
+        assert reopened._settings.mirrorchyan_cdk == "example-cdk"
+    finally:
+        reopened.close()
 
 
 def test_file_menu_uses_the_hit_image_and_preserves_selection(app, window, tmp_path, monkeypatch):
@@ -393,6 +439,29 @@ def test_navigation_joins_inflight_prefetch(app, window, blocked_prefetch):
     finish_read(app, window, prefetch=True)
     assert reads.count(slow) == 1
     assert window.canvas._image.pixelColor(0, 0).green() == 255
+
+
+@pytest.mark.parametrize(("old_mib", "new_mib"), [(1, 2), (2, 1)])
+def test_resizing_cache_during_prefetch(app, window, tmp_path, decoder_gates, old_mib, new_mib):
+    first, neighbor = tmp_path / "1.png", tmp_path / "2.png"
+    Image.new("RGB", (8, 8), "red").save(first)
+    Image.new("RGB", (640, 640), "blue").save(neighbor)
+    pause, reads = decoder_gates
+    started, release = pause(neighbor)
+    window._reads.set_cache_limits(max_entries=8, max_bytes=old_mib * 1024**2)
+    window.open_file(first)
+    wait_until(app, started.is_set)
+    window._reads.set_cache_limits(max_entries=8, max_bytes=new_mib * 1024**2)
+    release.set()
+    finish_read(app, window, prefetch=True)
+
+    fits = new_mib == 2
+    assert (neighbor in window._reads._cache) == fits
+    assert reads.count(neighbor) == (2 if fits else 1)
+    window.navigate(1)
+    finish_read(app, window)
+    assert window.canvas._image.pixelColor(0, 0).blue() == 255
+    assert reads.count(neighbor) == 2
 
 
 def test_skip_over_inflight_neighbor_keeps_its_pixels(app, window, tmp_path, decoder_gates):

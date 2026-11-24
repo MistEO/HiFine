@@ -90,6 +90,12 @@ class ImageReader(QObject):
         self._queue.clear()
         self._cache.clear()
 
+    def set_cache_limits(self, *, max_entries: int, max_bytes: int):
+        if (self._cache.max_entries, self._cache.max_bytes) == (max_entries, max_bytes):
+            return
+        self._cache.set_limits(max_entries=max_entries, max_bytes=max_bytes)
+        self.set_neighbors(self._neighbors)
+
     def rescan_folder(self, path, version, known_files):
         request = (path, version)
         known = set(known_files)
@@ -145,7 +151,10 @@ class ImageReader(QObject):
             # Only one speculative read at a time, leaving a slot for navigation.
             path = self._queue.pop(0)
             budget = self._cache.available_bytes(self._higher_priority_neighbors(path))
-            self._start(path, False, None, max_pixel_bytes=budget)
+            if budget > 0:
+                self._start(path, False, None, max_pixel_bytes=budget)
+            else:
+                self._queue.clear()  # Lower-priority neighbors have no more budget.
 
     def _higher_priority_neighbors(self, path):
         return self._neighbors[:self._neighbors.index(path)]
@@ -172,9 +181,16 @@ class ImageReader(QObject):
                 if frame is not None:
                     self._cache.put(path, frame)
                 self.ready.emit(path, siblings, frame, error)
-            elif frame is not None and path in self._neighbors:
-                # A lower-priority neighbor must not evict the predicted next image.
-                self._cache.put(path, frame, protected=self._higher_priority_neighbors(path))
+            elif path in self._neighbors:
+                protected = self._higher_priority_neighbors(path)
+                if frame is not None:
+                    # A lower-priority neighbor must not evict the predicted next image.
+                    self._cache.put(path, frame, protected=protected)
+                elif (job.max_pixel_bytes is not None
+                      and self._cache.available_bytes(protected) > job.max_pixel_bytes):
+                    # Replan in priority order if the old budget limited this prefetch.
+                    self.set_neighbors(self._neighbors)
+                    return
         self._dispatch()
 
     @Slot()

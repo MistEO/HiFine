@@ -62,6 +62,7 @@ def show_viewer(path: Path | None) -> int:
     else:
         QTimer.singleShot(0, lambda: window.open_sample() if app.pending_file is None else None)
     window.show()
+    QTimer.singleShot(0, window.start_update_check)
     return app.exec()
 
 

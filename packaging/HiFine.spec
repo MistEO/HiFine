@@ -28,7 +28,7 @@ python_license = next(path for path in (Path(sys.base_prefix) / "LICENSE.txt",
                                        Path(sysconfig.get_path("stdlib")) / "LICENSE.txt")
                       if path.is_file())
 data.append((str(python_license), "licenses/CPython"))
-for dependency in ("Pillow", "pillow-heif", "PySide6-Essentials", "shiboken6", "pyinstaller"):
+for dependency in ("Pillow", "pillow-heif", "PySide6-Essentials", "shiboken6", "pyinstaller", "packaging"):
     data.extend(copy_metadata(dependency))
 
 analysis = Analysis(

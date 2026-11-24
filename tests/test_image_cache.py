@@ -56,6 +56,37 @@ def test_failed_prefetch_preserves_existing_entries_and_lru_order():
     assert c not in cache and d not in cache
 
 
+def test_resizing_cache_trims_in_lru_order_and_allows_growth():
+    cache = ImageCache()
+    a, b, c, d = map(Path, ("a", "b", "c", "d"))
+    for path in (a, b, c, d):
+        cache.put(path, frame())
+    cache.get(a)
+
+    cache.set_limits(max_entries=3, max_bytes=16)
+    assert a in cache and c in cache and d in cache
+    assert b not in cache
+    cache.set_limits(max_entries=3, max_bytes=8)
+    assert c not in cache
+    assert a in cache and d in cache
+    assert cache.available_bytes((a, d)) == 0
+
+    cache.set_limits(max_entries=4, max_bytes=16)
+    assert cache.put(b, frame()) and cache.put(c, frame())
+    assert all(path in cache for path in (a, b, c, d))
+
+
+def test_smaller_budget_discards_oversized_frame_before_older_frames():
+    cache = ImageCache()
+    small, large = map(Path, ("small", "large"))
+    cache.put(small, frame())
+    cache.put(large, frame(height=4))
+
+    cache.set_limits(max_entries=8, max_bytes=8)
+    assert small in cache and large not in cache
+    assert not cache.put(large, frame(height=4))
+
+
 def test_file_version_tracks_changes_and_removal(tmp_path):
     path = tmp_path / "picture.png"
     assert image_version(path) is None
