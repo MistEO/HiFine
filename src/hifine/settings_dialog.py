@@ -74,6 +74,10 @@ class SettingsDialog(QDialog):
         self.buttons.rejected.connect(self.reject)
         layout.addWidget(self.buttons)
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.setMinimumHeight(self.layout().totalHeightForWidth(event.size().width()))
+
     def _cache_group(self):
         group = QGroupBox("图片缓存")
         form = QFormLayout(group)

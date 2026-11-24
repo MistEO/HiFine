@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from .canvas import ImageCanvas
-from .controls import ElidedLabel, InfoPanel, ToolButton, divider, glyph
+from .controls import ElidedLabel, InfoPanel, ToolButton, WrappedText, divider, glyph
 from .favorites import FavoriteStore
 from .file_clipboard import finish_file_paste, read_file_clipboard, transfer_files, write_file_clipboard
 from .file_menu import reveal_files, show_file_menu
@@ -50,14 +50,14 @@ QFrame#divider { background: #38383a; border: none; }
 QLabel#brand { font-family: 'Inter', 'Segoe UI', sans-serif; font-size: 24px;
     font-weight: 700; letter-spacing: -1px; color: #faf8f4; }
 QLabel#location, QLabel#selection, QLabel#metaKey { color: #b1ada7; }
-QLabel#location, QLabel#selection, QLabel#position, QLabel#metaValue, QLabel#metaKey { font-size: 12px; }
+QLabel#location, QLabel#selection, QLabel#position, QTextEdit#metaValue, QLabel#metaKey { font-size: 12px; }
 QLabel#panelTitle, QLabel#stateTitle { font-size: 17px; font-weight: 600; }
 QLabel#keyHint { padding: 1px 5px; font-size: 11px; color: #b1ada7;
     border: 1px solid #504e4c; border-radius: 4px; }
 QLabel#sectionTitle { font-size: 12px; font-weight: 600; color: #f1bc86; }
-QLabel#metaValue { color: #dfddd8; }
+QTextEdit#metaValue { color: #dfddd8; background: transparent; }
 QLabel#filename { color: #f4f1ec; font-size: 14px; font-weight: 600; }
-QLabel#stateDescription { color: #a8a5a0; }
+QTextEdit#stateDescription { color: #a8a5a0; background: transparent; }
 QWidget#thumbnailSidebar { background: #232426; }
 QFrame#buttonGroup { background: #292a2c; border: 1px solid #454548; border-radius: 7px; }
 QToolButton#zoom { font-size: 12px; font-weight: 600; }
@@ -144,6 +144,7 @@ class MainWindow(QMainWindow):
         bar.addPermanentWidget(self.undo_trash_button)
         self.undo_trash_button.hide()
         bar.hide()
+        bar.messageChanged.connect(bar.setToolTip)
         bar.messageChanged.connect(lambda text: bar.setVisible(bool(text)))
         self._setup_shortcuts()
         self._show_state("打开一张图片", self._open_hint)
@@ -245,14 +246,15 @@ class MainWindow(QMainWindow):
         state_layout.addWidget(state_icon, 0, Qt.AlignmentFlag.AlignHCenter)
         self.state_title = QLabel()
         self.state_title.setObjectName("stateTitle")
-        self.state_description = QLabel()
+        self.state_description = WrappedText(Qt.AlignmentFlag.AlignHCenter)
         self.state_description.setObjectName("stateDescription")
-        self.state_description.setTextFormat(Qt.TextFormat.PlainText)
-        self.state_description.setWordWrap(True)
         self.state_description.setMaximumWidth(420)
-        self.state_description.setAlignment(Qt.AlignmentFlag.AlignCenter)
         state_layout.addWidget(self.state_title, 0, Qt.AlignmentFlag.AlignHCenter)
-        state_layout.addWidget(self.state_description, 0, Qt.AlignmentFlag.AlignHCenter)
+        description_row = QHBoxLayout()
+        description_row.addStretch()
+        description_row.addWidget(self.state_description, 1)
+        description_row.addStretch()
+        state_layout.addLayout(description_row)
         state_layout.addStretch()
         self.stage.addWidget(self.state)
         body.addWidget(self.stage, 1)
@@ -299,7 +301,7 @@ class MainWindow(QMainWindow):
         self.minus_button = ToolButton("minus", "缩小", lambda: self.canvas.zoom_by(1 / 1.2))
         self.zoom_button = ToolButton(None, "原始大小", lambda: self.canvas.set_zoom(1.0), text="100%")
         self.zoom_button.setObjectName("zoom")
-        self.zoom_button.setFixedWidth(55)
+        self.zoom_button.setMinimumWidth(55)
         self.plus_button = ToolButton("plus", "放大", lambda: self.canvas.zoom_by(1.2))
         self.fit_button = ToolButton("fit", "适应窗口", self.canvas.fit, checkable=True)
         group(self.minus_button, self.zoom_button, self.plus_button, divider(True), self.fit_button)
@@ -403,9 +405,7 @@ class MainWindow(QMainWindow):
         self._updates.start(self._settings.mirrorchyan_cdk)
 
     def _show_update_notice(self, message):
-        bar = self.statusBar()
-        bar.setToolTip(message)
-        bar.showMessage(message, 15_000)
+        self.statusBar().showMessage(message, 15_000)
 
     def _open_installer(self, version, path):
         if QDesktopServices.openUrl(QUrl.fromLocalFile(path)):
@@ -440,7 +440,7 @@ class MainWindow(QMainWindow):
 
     def _show_state(self, title, description=""):
         self.state_title.setText(title)
-        self.state_description.setText(description)
+        self.state_description.setPlainText(description)
         self.state_description.setVisible(bool(description))
         self.stage.setCurrentWidget(self.state)
         self._displayed_path = None

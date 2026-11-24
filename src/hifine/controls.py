@@ -1,10 +1,12 @@
 """Small native controls used in HiFine's desktop viewer."""
 
+from math import ceil
+
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt
-from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap, QPolygonF
+from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap, QPolygonF, QTextOption
 from PySide6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QLabel, QScrollArea, QSizePolicy,
-    QToolButton, QVBoxLayout, QWidget,
+    QTextEdit, QToolButton, QVBoxLayout, QWidget,
 )
 
 
@@ -147,6 +149,42 @@ class ElidedLabel(QLabel):
         self._elide()
 
 
+class WrappedText(QTextEdit):
+    """Read-only text that can wrap inside a long filename without changing it."""
+
+    def __init__(self, alignment, *, selectable=False):
+        super().__init__()
+        self.setReadOnly(True)
+        self.setAcceptDrops(False)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.viewport().setAutoFillBackground(False)
+        self.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse if selectable
+                                     else Qt.TextInteractionFlag.NoTextInteraction)
+        self.setFocusPolicy(Qt.FocusPolicy.ClickFocus if selectable else Qt.FocusPolicy.NoFocus)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.document().setDocumentMargin(0)
+        option = self.document().defaultTextOption()
+        option.setAlignment(alignment)
+        option.setWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
+        self.document().setDefaultTextOption(option)
+        policy = QSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        policy.setHeightForWidth(True)
+        self.setSizePolicy(policy)
+        self.textChanged.connect(self.updateGeometry)
+
+    def minimumSizeHint(self):
+        return QSize(0, self.fontMetrics().height())
+
+    def sizeHint(self):
+        return self.minimumSizeHint()
+
+    def heightForWidth(self, width):
+        # Layouts can probe several widths before assigning the on-screen geometry.
+        document = self.document().clone()
+        document.setTextWidth(max(1, width))
+        return ceil(document.size().height())
+
+
 def divider(vertical=False):
     rule = QFrame()
     rule.setObjectName("divider")
@@ -217,13 +255,9 @@ class InfoPanel(QFrame):
                 key = QLabel(name)
                 key.setObjectName("metaKey")
                 key.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-                val = QLabel(str(value))
+                val = WrappedText(Qt.AlignmentFlag.AlignRight, selectable=True)
                 val.setObjectName("metaValue")
-                val.setTextFormat(Qt.TextFormat.PlainText)
-                val.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-                val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
-                val.setWordWrap(True)
-                val.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+                val.setPlainText(str(value))
                 val.setToolTip(str(value))
                 grid.addWidget(key, i, 0)
                 grid.addWidget(val, i, 1)

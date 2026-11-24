@@ -12,7 +12,7 @@ from PySide6.QtCore import QCoreApplication, QEvent, QPoint, QPointF, QSettings,
 from PySide6.QtGui import QContextMenuEvent, QImage, QKeySequence, QMovie, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
-    QAbstractButton, QApplication, QDialogButtonBox, QFileDialog, QLabel, QLineEdit, QMessageBox,
+    QAbstractButton, QApplication, QDialogButtonBox, QFileDialog, QLabel, QLineEdit, QMessageBox, QTextEdit,
 )
 
 from hifine import file_menu, reader
@@ -20,6 +20,7 @@ from hifine.app import SAMPLE
 from hifine.favorites import FavoriteStore
 from hifine.file_clipboard import read_file_clipboard, write_file_clipboard
 from hifine.settings import AppSettings
+from hifine.settings_dialog import SettingsDialog
 from hifine.viewer import MainWindow
 
 
@@ -111,6 +112,13 @@ def test_star_filter_navigation_bulk_copy_and_unmark(app, window, tmp_path):
     QTest.keyClick(view, Qt.Key.Key_F)
     assert window.files == [] and window.current_path is None
     assert window.state_title.text() == "还没有星标照片"
+    description = window.state_description
+    for width in (600, 1200):
+        window.resize(width, 600)
+        app.processEvents()
+        assert description.isVisible()
+        assert description.height() >= description.heightForWidth(description.width())
+        assert abs(description.geometry().center().x() - window.state.rect().center().x()) <= 1
     assert not window.favorite_button.isEnabled()
     QTest.mouseClick(window.favorite_filter, Qt.MouseButton.LeftButton)
     finish_read(app, window)
@@ -123,6 +131,23 @@ def test_star_filter_navigation_bulk_copy_and_unmark(app, window, tmp_path):
     window.favorite_filter.click()
     finish_read(app, window)
     assert window.current_path == paths[1] and window.canvas.zoom() == 2
+
+
+def test_read_error_wraps_long_filename_after_resizing(app, window, tmp_path):
+    path = tmp_path / ("DSC_" + "0123456789" * 8 + ".png")
+    path.write_bytes(b"broken image")
+    window.open_file(path)
+    finish_read(app, window)
+    assert window.state_title.text() == "无法打开这张图片"
+    description = window.state_description
+    assert path.name in description.toPlainText()
+    for width in (600, 1200):
+        window.resize(width, 650)
+        app.processEvents()
+        document = description.document()
+        assert document.firstBlock().layout().lineCount() > 1
+        assert document.idealWidth() <= description.viewport().width()
+        assert document.size().height() <= description.viewport().height()
 
 
 def test_filtered_rename_refresh_and_explicit_open(app, window, tmp_path, monkeypatch):
@@ -219,6 +244,17 @@ def test_open_sample_shows_three_bundled_thumbnails(app, window):
     assert model.rowCount() == 3
     rows = [model.index(row, 0) for row in range(3)]
     wait_until(app, lambda: all(thumbnail_color(row) for row in rows))
+
+
+def test_settings_descriptions_fit_when_dialog_is_shrunk(app, window):
+    dialog = SettingsDialog(AppSettings(), window)
+    dialog.show()
+    dialog.resize(dialog.minimumWidth(), 1)
+    app.processEvents()
+    assert dialog.height() >= dialog.layout().totalHeightForWidth(dialog.width())
+    for label in dialog.findChildren(QLabel, "description"):
+        assert label.height() >= label.heightForWidth(label.width())
+    dialog.close()
 
 
 def test_settings_save_cancel_and_reopen(app, window, settings_store, tmp_path):
@@ -401,15 +437,18 @@ def test_shortcut_help_preserves_thumbnail_selection_and_focus(app, window, tmp_
 
 
 def test_thumbnail_shortcuts_preserve_copying_metadata(app, window, tmp_path):
-    path = tmp_path / "photo.png"
+    path = tmp_path / ("DSC_" + "0123456789" * 6 + ".png")
     Image.new("RGB", (8, 8)).save(path)
+    window.resize(600, 600)
     window.open_file(path)
     finish_read(app, window)
-    label = next(label for label in window.info_panel.findChildren(QLabel, "metaValue")
-                 if label.text() == path.name)
-    label.setFocus()
-    label.setSelection(0, len(label.text()))
-    QTest.keyClick(label, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
+    value = next(value for value in window.info_panel.findChildren(QTextEdit, "metaValue")
+                 if value.toPlainText() == path.name)
+    assert value.document().firstBlock().layout().lineCount() > 1
+    assert value.document().size().height() <= value.viewport().height()
+    value.setFocus()
+    value.selectAll()
+    QTest.keySequence(value, QKeySequence(QKeySequence.StandardKey.Copy))
     assert app.clipboard().text() == path.name
 
 
@@ -451,6 +490,7 @@ def test_paste_in_bundled_samples_keeps_cut_photo_on_clipboard(app, window, tmp_
     assert photo.is_file() and not (samples / photo.name).exists()
     assert read_file_clipboard(app.clipboard()) == snapshot
     assert "目标文件夹" in window.statusBar().currentMessage()
+    assert window.statusBar().toolTip() == window.statusBar().currentMessage()
 
 
 @pytest.fixture
@@ -1009,6 +1049,9 @@ def test_pointer_anchored_zoom_and_drag(app, window, tmp_path):
     QTest.keyClick(window, Qt.Key.Key_0)
     assert canvas.zoom() == canvas.fit_zoom()
     assert canvas._offset.isNull()
+    canvas.set_zoom(32)
+    assert window.zoom_button.text() == "3200%"
+    wait_until(app, lambda: window.zoom_button.width() >= window.zoom_button.sizeHint().width())
 
 
 @pytest.mark.parametrize("keep_view", [False, True])
