@@ -2,6 +2,7 @@
 from pathlib import Path
 import os
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -49,7 +50,17 @@ if sys.platform.startswith("linux") and shutil.which("dpkg-query"):
     if system_files:
         owners = subprocess.run(["dpkg-query", "-S", *sorted(system_files)], text=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        packages = sorted({line.split(":", 1)[0] for line in owners.stdout.splitlines() if ": " in line})
+        # Ownership lines can list several package:arch names. The additional
+        # human-readable diversion descriptions are not package names.
+        names = set()
+        for line in owners.stdout.splitlines():
+            owner_list, separator, _ = line.partition(": ")
+            if separator:
+                for owner in owner_list.split(", "):
+                    match = re.fullmatch(r"([a-z0-9][a-z0-9+.-]*)(?::[a-z0-9-]+)?", owner)
+                    if match:
+                        names.add(match[1])
+        packages = sorted(names)
         for name in packages:
             notice = Path("/usr/share/doc") / name / "copyright"
             if notice.is_file():
