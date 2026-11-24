@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 from PIL import Image
 import pytest
-from PySide6.QtCore import QPoint, QPointF, QSettings, Qt, QTimer
+from PySide6.QtCore import QCoreApplication, QEvent, QPoint, QPointF, QSettings, Qt, QTimer
 from PySide6.QtGui import QContextMenuEvent, QImage, QKeySequence, QMovie, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QAbstractButton, QApplication, QDialogButtonBox, QLabel, QLineEdit, QMessageBox
@@ -42,8 +42,14 @@ def window(app, settings_store):
     widget.activateWindow()
     app.processEvents()
     yield widget
+    dispose_window(widget)
+
+
+def dispose_window(widget):
     widget.close()
-    widget._reads._pool.waitForDone()
+    widget._reads.shutdown()
+    widget.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
 def wait_until(app, predicate):
@@ -118,7 +124,7 @@ def test_settings_save_cancel_and_reopen(app, window, settings_store, tmp_path):
         assert (cache.max_entries, cache.max_bytes) == (3, 64 * 1024**2)
         assert reopened._settings.mirrorchyan_cdk == "example-cdk"
     finally:
-        reopened.close()
+        dispose_window(reopened)
 
 
 def test_file_menu_uses_the_hit_image_and_preserves_preview(app, window, tmp_path, monkeypatch):
@@ -210,16 +216,22 @@ def test_thumbnail_shortcut_hint_stays_visible_and_preserves_focus(app, window, 
     assert view.selected_paths() == paths[-2:]
 
     menu = hint.menu()
-    labels = []
+    visible_labels = []
 
     def read_hint():
-        if QTest.qWaitForWindowExposed(menu, 2000):
-            labels.extend(label.text() for label in menu.findChildren(QLabel) if label.isVisible())
+        card = menu.actions()[0].defaultWidget()
+        visible_labels.append([label.text() for label in card.findChildren(QLabel) if label.isVisible()])
         QTest.keyClick(menu, Qt.Key.Key_Escape)
 
     menu.aboutToShow.connect(lambda: QTimer.singleShot(0, read_hint))
     QTest.mouseClick(hint, Qt.MouseButton.LeftButton)
-    wait_until(app, lambda: bool(labels) and not menu.isVisible() and view.hasFocus())
+    wait_until(app, lambda: bool(visible_labels))
+    labels, = visible_labels
+    assert labels
+    wait_until(app, lambda: not menu.isVisible())
+    assert window.focusWidget() is view
+    window.activateWindow()
+    wait_until(app, view.hasFocus)
     click = "⌘ + 点击" if sys.platform == "darwin" else "Ctrl + 点击"
     assert hint.text() == f"{click}多选" and click in labels
     keys = QKeySequence.StandardKey
