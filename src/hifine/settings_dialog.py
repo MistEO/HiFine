@@ -4,8 +4,8 @@ from dataclasses import replace
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QDialog, QDialogButtonBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QSpinBox,
-    QVBoxLayout,
+    QCheckBox, QDialog, QDialogButtonBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
+    QLineEdit, QSpinBox, QVBoxLayout,
 )
 
 from .settings import MAX_SETTING_INT, AppSettings
@@ -13,7 +13,7 @@ from .settings import MAX_SETTING_INT, AppSettings
 
 STYLE = """
 QDialog { background: #232426; }
-QLabel, QGroupBox, QSpinBox, QLineEdit, QPushButton { color: #eeeae4; font-size: 13px; }
+QLabel, QCheckBox, QGroupBox, QSpinBox, QLineEdit, QPushButton { color: #eeeae4; font-size: 13px; }
 QGroupBox { font-weight: 600; border: 1px solid #454548; border-radius: 7px;
     margin-top: 9px; }
 QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; color: #f1bc86; }
@@ -41,6 +41,13 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 16, 20, 16)
         layout.setSpacing(16)
+        view_group = QGroupBox("图片浏览")
+        view_layout = QVBoxLayout(view_group)
+        view_layout.setContentsMargins(16, 22, 16, 16)
+        self.keep_zoom_position = QCheckBox("翻图时保留缩放倍率和查看位置")
+        self.keep_zoom_position.setChecked(settings.keep_zoom_position)
+        view_layout.addWidget(self.keep_zoom_position)
+        layout.addWidget(view_group)
         layout.addWidget(self._cache_group())
         layout.addWidget(self._update_group())
         layout.addStretch()
@@ -108,4 +115,5 @@ class SettingsDialog(QDialog):
 
     def settings(self) -> AppSettings:
         return replace(self._settings, cache_max_entries=self.cache_max_entries.value(),
-                       cache_max_mib=self.cache_max_mib.value(), mirrorchyan_cdk=self.mirrorchyan_cdk.text().strip())
+                       cache_max_mib=self.cache_max_mib.value(), mirrorchyan_cdk=self.mirrorchyan_cdk.text().strip(),
+                       keep_zoom_position=self.keep_zoom_position.isChecked())

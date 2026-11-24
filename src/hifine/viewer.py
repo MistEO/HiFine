@@ -682,12 +682,14 @@ class MainWindow(QMainWindow):
     def _show_loading(self):
         self._show_path(self.current_path)
         self.info_panel.set_details(self.current_path, {})
-        self.canvas.set_image(QImage())
+        self.canvas.set_image(QImage(), keep_view=self._settings.keep_zoom_position)
         self._show_state("正在读取图片…")
 
     @Slot(object, object, object, str)
     def _read_finished(self, path, siblings, frame, error):
         self._loading_hint.stop()
+        # An explicit open scans a folder and starts with the whole image in view.
+        keep_view = self._settings.keep_zoom_position and siblings is None
         self._show_path(path)
         if siblings is not None:
             self.files = siblings
@@ -699,12 +701,12 @@ class MainWindow(QMainWindow):
         details = frame.metadata if frame is not None else {}
         self.info_panel.set_details(path, details)
         if error:
-            self.canvas.set_image(QImage())
+            self.canvas.set_image(QImage(), keep_view=keep_view)
             self._show_state("无法打开这张图片", error, open_button=True)
         else:
             self.stage.setCurrentWidget(self.canvas)
             self._displayed_path = path
-            self.canvas.set_image(frame.image)
+            self.canvas.set_image(frame.image, keep_view=keep_view)
             self._set_zoom_enabled(True)
             if details.get("animated"):
                 self._start_animation(path, details.get("animation_orientation", 1))

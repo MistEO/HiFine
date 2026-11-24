@@ -14,7 +14,8 @@ def test_settings_round_trip(tmp_path):
     assert AppSettings.load(store) == AppSettings(8, 256)
 
     store.setValue("appearance/theme", "dark")
-    chosen = AppSettings(cache_max_entries=12, cache_max_mib=768, mirrorchyan_cdk="example-cdk")
+    chosen = AppSettings(cache_max_entries=12, cache_max_mib=768, mirrorchyan_cdk="example-cdk",
+                         keep_zoom_position=True)
     chosen.save(store)
 
     reopened = ini(path)

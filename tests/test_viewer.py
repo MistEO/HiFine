@@ -95,27 +95,29 @@ def test_settings_save_cancel_and_reopen(app, window, settings_store, tmp_path):
     window.canvas.set_zoom(2)
     initial = []
 
-    def edit(entries, mib, cdk, button):
+    def edit(entries, mib, cdk, keep_zoom_position, button):
         dialog = app.activeModalWidget()
         initial.append((dialog.cache_max_entries.value(), dialog.cache_max_mib.value(),
-                        dialog.mirrorchyan_cdk.text(), dialog.mirrorchyan_cdk.echoMode()))
+                        dialog.mirrorchyan_cdk.text(), dialog.mirrorchyan_cdk.echoMode(),
+                        dialog.keep_zoom_position.isChecked()))
         dialog.cache_max_entries.setValue(entries)
         dialog.cache_max_mib.setValue(mib)
         dialog.mirrorchyan_cdk.setText(cdk)
+        dialog.keep_zoom_position.setChecked(keep_zoom_position)
         QTest.mouseClick(dialog.buttons.button(button), Qt.MouseButton.LeftButton)
 
     buttons = QDialogButtonBox.StandardButton
-    QTimer.singleShot(0, lambda: edit(3, 64, " example-cdk ", buttons.Save))
+    QTimer.singleShot(0, lambda: edit(3, 64, " example-cdk ", True, buttons.Save))
     QTest.mouseClick(window.settings_button, Qt.MouseButton.LeftButton)
-    assert AppSettings.load(settings_store) == AppSettings(3, 64, "example-cdk")
+    assert AppSettings.load(settings_store) == AppSettings(3, 64, "example-cdk", True)
     cache = window._reads._cache
     assert (cache.max_entries, cache.max_bytes) == (3, 64 * 1024**2)
     assert window.current_path == photo and window.canvas.zoom() == 2
 
-    QTimer.singleShot(0, lambda: edit(1, 1, "", buttons.Cancel))
+    QTimer.singleShot(0, lambda: edit(1, 1, "", False, buttons.Cancel))
     QTest.mouseClick(window.settings_button, Qt.MouseButton.LeftButton)
     masked = QLineEdit.EchoMode.Password
-    assert initial == [(8, 256, "", masked), (3, 64, "example-cdk", masked)]
+    assert initial == [(8, 256, "", masked, False), (3, 64, "example-cdk", masked, True)]
     assert (cache.max_entries, cache.max_bytes) == (3, 64 * 1024**2)
 
     reopened = MainWindow(settings_store=QSettings(settings_store.fileName(), QSettings.Format.IniFormat))
@@ -123,6 +125,7 @@ def test_settings_save_cancel_and_reopen(app, window, settings_store, tmp_path):
         cache = reopened._reads._cache
         assert (cache.max_entries, cache.max_bytes) == (3, 64 * 1024**2)
         assert reopened._settings.mirrorchyan_cdk == "example-cdk"
+        assert reopened._settings.keep_zoom_position
     finally:
         dispose_window(reopened)
 
@@ -770,6 +773,54 @@ def test_pointer_anchored_zoom_and_drag(app, window):
     QTest.keyClick(window, Qt.Key.Key_0)
     assert canvas.zoom() == canvas.fit_zoom()
     assert canvas._offset.isNull()
+
+
+@pytest.mark.parametrize("keep_view", [False, True])
+def test_navigation_zoom_and_position(app, window, tmp_path, decoder_gates, keep_view):
+    first, second, tiny = [tmp_path / f"{i}.png" for i in range(3)]
+    Image.new("RGB", (800, 600)).save(first)
+    Image.new("RGB", (600, 900)).save(second)
+    Image.new("RGB", (16, 16)).save(tiny)
+    pause, _ = decoder_gates
+    started, release = pause(second)
+    window._apply_settings(AppSettings(keep_zoom_position=keep_view))
+    window.open_file(first)
+    wait_until(app, started.is_set)
+    canvas = window.canvas
+    canvas.set_zoom(4)
+    start = canvas.rect().center()
+    end = start + QPoint(32, 20)
+    QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=start)
+    QTest.mouseMove(canvas, end)
+    QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=end)
+    assert canvas._offset == QPointF(32, 20)
+
+    QTest.keyClick(window, Qt.Key.Key_Right)
+    wait_until(app, lambda: window.state.isVisible())
+    release.set()
+    finish_read(app, window)
+    assert window.current_path == second
+    if keep_view:
+        assert canvas.zoom() == 4
+        assert canvas._offset == QPointF(24, 30)
+    else:
+        assert window.fit_button.isChecked()
+        assert canvas._offset.isNull()
+
+    window.navigate(1)
+    finish_read(app, window)
+    assert window.current_path == tiny
+    assert canvas._offset.isNull()
+    window.navigate(-1)
+    finish_read(app, window)
+    assert canvas._offset == (QPointF(24, 30) if keep_view else QPointF())
+    # Opening another file explicitly starts a fresh view, including in this folder.
+    window.open_file(first)
+    finish_read(app, window)
+    assert window.fit_button.isChecked()
+    window.navigate(1)
+    finish_read(app, window)
+    assert window.fit_button.isChecked()
 
 
 @pytest.mark.parametrize("extension", ["gif", "webp"])

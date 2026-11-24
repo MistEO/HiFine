@@ -1,6 +1,6 @@
 """High-DPI image canvas with pointer-anchored zoom."""
 
-from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QPoint, QPointF, QRectF, QSizeF, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QContextMenuEvent, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QWidget
 
@@ -16,7 +16,7 @@ class ImageCanvas(QWidget):
         self.setAccessibleName("图片画布")
         self._image = QImage()
         self._fixed_zoom = None
-        self._offset = QPointF()
+        self._relative_offset = QPointF()
         self._drag_point = None
         self._checker = QPixmap(16, 16)
         self._checker.fill(QColor("#39393b"))
@@ -25,9 +25,13 @@ class ImageCanvas(QWidget):
         painter.fillRect(8, 8, 8, 8, QColor("#444446"))
         painter.end()
 
-    def set_image(self, image):
+    def set_image(self, image, *, keep_view=False):
         self._image = image
-        self.fit()
+        if keep_view:
+            self._drag_point = None
+            self._refresh()
+        else:
+            self.fit()
 
     def set_frame(self, image):
         self._image = image
@@ -49,7 +53,7 @@ class ImageCanvas(QWidget):
 
     def fit(self):
         self._fixed_zoom = None
-        self._offset = QPointF()
+        self._relative_offset = QPointF()
         self._drag_point = None
         self._refresh()
 
@@ -60,27 +64,42 @@ class ImageCanvas(QWidget):
         center = QRectF(self.rect()).center()
         focus = anchor if anchor is not None else center
         ratio = value / self.zoom()
-        self._offset = focus - center - (focus - center - self._offset) * ratio
+        offset = focus - center - (focus - center - self._offset) * ratio
         self._fixed_zoom = value
+        self._set_offset(offset)
         self._refresh()
 
     def zoom_by(self, factor, anchor=None):
         self.set_zoom(self.zoom() * factor, anchor)
 
+    def _scaled_size(self):
+        return QSizeF(self._image.size()) * (self.zoom() / self.devicePixelRatioF())
+
     def _bounds(self):
-        scale = self.zoom() / self.devicePixelRatioF()
+        size = self._scaled_size()
         return QPointF(
-            max(0.0, (self._image.width() * scale - self.width()) / 2),
-            max(0.0, (self._image.height() * scale - self.height()) / 2),
+            max(0.0, (size.width() - self.width()) / 2),
+            max(0.0, (size.height() - self.height()) / 2),
         )
 
-    def _clamp_offset(self):
+    def _bounded_offset(self, offset):
         bounds = self._bounds()
-        self._offset.setX(max(-bounds.x(), min(bounds.x(), self._offset.x())))
-        self._offset.setY(max(-bounds.y(), min(bounds.y(), self._offset.y())))
+        return QPointF(max(-bounds.x(), min(bounds.x(), offset.x())),
+                       max(-bounds.y(), min(bounds.y(), offset.y())))
+
+    @property
+    def _offset(self):
+        # Keep the requested location even if a smaller image limits how far we can pan.
+        size = self._scaled_size()
+        return self._bounded_offset(QPointF(self._relative_offset.x() * size.width(),
+                                            self._relative_offset.y() * size.height()))
+
+    def _set_offset(self, offset):
+        offset = self._bounded_offset(offset)
+        size = self._scaled_size()
+        self._relative_offset = QPointF(offset.x() / size.width(), offset.y() / size.height())
 
     def _refresh(self):
-        self._clamp_offset()
         if self._bounds().isNull():
             self.unsetCursor()
         else:
@@ -94,8 +113,7 @@ class ImageCanvas(QWidget):
         self._refresh()
 
     def _image_rect(self):
-        scale = self.zoom() / self.devicePixelRatioF()
-        target = QRectF(0, 0, self._image.width() * scale, self._image.height() * scale)
+        target = QRectF(QPointF(), self._scaled_size())
         target.moveCenter(QRectF(self.rect()).center() + self._offset)
         return target
 
@@ -154,9 +172,8 @@ class ImageCanvas(QWidget):
     def mouseMoveEvent(self, event):
         if self._drag_point is None:
             return super().mouseMoveEvent(event)
-        self._offset += event.position() - self._drag_point
+        self._set_offset(self._offset + event.position() - self._drag_point)
         self._drag_point = event.position()
-        self._clamp_offset()
         self.update()
 
     def mouseReleaseEvent(self, event):

@@ -30,6 +30,7 @@ class AppSettings:
     cache_max_entries: int = DEFAULT_CACHE_ENTRIES
     cache_max_mib: int = DEFAULT_CACHE_MIB
     mirrorchyan_cdk: str = field(default="", repr=False)
+    keep_zoom_position: bool = False
 
     def __post_init__(self):
         if not _valid_limit(self.cache_max_entries) or not _valid_limit(self.cache_max_mib):
@@ -44,6 +45,7 @@ class AppSettings:
             cache_max_entries=_read_limit(store, "cache/maxEntries", DEFAULT_CACHE_ENTRIES),
             cache_max_mib=_read_limit(store, "cache/maxMiB", DEFAULT_CACHE_MIB),
             mirrorchyan_cdk=cdk.strip() if isinstance(cdk, str) else "",
+            keep_zoom_position=str(store.value("view/keepZoomPosition", False)).lower() == "true",
         )
 
     def save(self, store: QSettings | None = None) -> None:
@@ -51,6 +53,7 @@ class AppSettings:
             store = QSettings("HiFine", "HiFine")
         store.setValue("cache/maxEntries", self.cache_max_entries)
         store.setValue("cache/maxMiB", self.cache_max_mib)
+        store.setValue("view/keepZoomPosition", self.keep_zoom_position)
         if self.mirrorchyan_cdk:
             store.setValue("updates/mirrorchyanCdk", self.mirrorchyan_cdk)
         else:
