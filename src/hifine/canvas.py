@@ -11,7 +11,7 @@ class ImageCanvas(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMouseTracking(True)
         self.setAccessibleName("图片画布")
         self._image = QImage()
@@ -150,6 +150,9 @@ class ImageCanvas(QWidget):
         painter.setPen(QPen(QColor(255, 255, 255, 30), 0))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRect(target)
+        if self.hasFocus() and self.window().testAttribute(Qt.WidgetAttribute.WA_KeyboardFocusChange):
+            painter.setPen(QPen(QColor("#f1bc86"), 1))
+            painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
 
     def wheelEvent(self, event):
         delta = event.angleDelta().y()

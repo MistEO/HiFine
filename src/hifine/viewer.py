@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+import sys
 
 from PySide6.QtCore import (
     QDir, QFile, QFileSystemWatcher, QSize, QStandardPaths, Qt, QThreadPool, QTimer, QUrl, Signal, Slot,
@@ -9,11 +10,11 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QColorSpace, QDesktopServices, QGuiApplication, QImage, QKeySequence, QMovie, QShortcut, QTransform
 from PySide6.QtWidgets import (
     QApplication, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
-    QMessageBox, QPushButton, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget,
+    QMessageBox, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget,
 )
 
 from .canvas import ImageCanvas
-from .controls import ElidedLabel, InfoPanel, divider, glyph, thumbnail_shortcut_button, tool_button
+from .controls import ElidedLabel, InfoPanel, ToolButton, divider, glyph
 from .favorites import FavoriteStore
 from .file_clipboard import finish_file_paste, read_file_clipboard, transfer_files, write_file_clipboard
 from .file_menu import reveal_files, show_file_menu
@@ -22,12 +23,24 @@ from .imaging import SUPPORTED_EXTENSIONS
 from .reader import ImageReader
 from .settings import AppSettings
 from .settings_dialog import SettingsDialog
+from .shortcuts_dialog import ShortcutsDialog
 from .thumbnails import ThumbnailList
 from .trash import TrashEntryChanged, move_to_trash, restore_from_trash
 from .updates import UpdateChecker
 
 
-STYLE = """
+BUTTON_STYLE = """
+QToolButton { background: transparent; color: #e5e1da; border: 1px solid transparent;
+    border-radius: 5px; padding: 3px 5px; }
+QToolButton:hover { background: #38383a; }
+QToolButton:checked { background: #43372d; border-color: #705339; color: #f5c695; }
+QToolButton:checked:hover { background: #504033; }
+QToolButton:pressed { background: #484749; }
+QToolButton:disabled { color: #837f7b; }
+QToolButton:focus { border-color: #f1bc86; }
+"""
+
+STYLE = BUTTON_STYLE + """
 QWidget { color: #eeeae4; font-size: 13px; }
 QFrame#header, QFrame#footer, QFrame#panel, QWidget#infoContent, QScrollArea {
     background: #232426;
@@ -36,42 +49,22 @@ QWidget#state { background: #18191b; }
 QFrame#divider { background: #38383a; border: none; }
 QLabel#brand { font-family: 'Inter', 'Segoe UI', sans-serif; font-size: 24px;
     font-weight: 700; letter-spacing: -1px; color: #faf8f4; }
-QLabel#location, QLabel#position, QLabel#metaKey { color: #a19e99; }
-QLabel#location, QLabel#position, QLabel#metaValue, QLabel#metaKey { font-size: 12px; }
+QLabel#location, QLabel#selection, QLabel#metaKey { color: #b1ada7; }
+QLabel#location, QLabel#selection, QLabel#position, QLabel#metaValue, QLabel#metaKey { font-size: 12px; }
 QLabel#panelTitle, QLabel#stateTitle { font-size: 17px; font-weight: 600; }
-QLabel#keyHint { padding: 1px 5px; font-size: 11px; color: #a8a59e;
+QLabel#keyHint { padding: 1px 5px; font-size: 11px; color: #b1ada7;
     border: 1px solid #504e4c; border-radius: 4px; }
 QLabel#sectionTitle { font-size: 12px; font-weight: 600; color: #f1bc86; }
-QLabel#metaValue, QLabel#filename { color: #dfddd8; }
+QLabel#metaValue { color: #dfddd8; }
+QLabel#filename { color: #f4f1ec; font-size: 14px; font-weight: 600; }
 QLabel#stateDescription { color: #a8a5a0; }
-QToolButton, QPushButton { background: transparent; color: #e5e1da; border: 1px solid transparent;
-    border-radius: 5px; padding: 3px; }
-QToolButton:hover, QPushButton:hover { background: #38383a; }
-QToolButton:pressed, QPushButton:pressed { background: #454443; }
-QToolButton:checked { background: #42362c; border-color: #624b37; }
 QWidget#thumbnailSidebar { background: #232426; }
-QToolButton#favoriteFilter { border-right: 1px solid #38383a; border-bottom: 1px solid #38383a;
-    border-radius: 0; }
-QToolButton#thumbnailHint { background: #232426; color: #e1c9b1; font-size: 12px;
-    border: none; border-top: 1px solid #38383a; border-right: 1px solid #38383a;
-    border-radius: 0; padding: 3px 10px 3px 1px; }
-QToolButton#thumbnailHint::menu-indicator { subcontrol-origin: padding; subcontrol-position: right center;
-    right: 3px; width: 6px; height: 6px; }
-QToolButton#thumbnailHint:hover, QToolButton#thumbnailHint:pressed { background: #39332e; }
-QMenu#thumbnailShortcutMenu { background: #292a2c; border: 1px solid #504e4c; }
-QToolButton#reveal, QPushButton#open { background: #f0b47b; color: #251c14; font-weight: 600;
-    padding: 5px 12px; border: 1px solid #f1bd8b; }
-QToolButton#reveal { padding-right: 3.5em; }
-QToolButton#reveal QLabel#keyHint { color: #58381f; border-color: #b98151; }
-QToolButton#reveal QLabel#keyHint:disabled { color: #85827e; border-color: #555250; }
-QToolButton#reveal:hover, QPushButton#open:hover { background: #fac58f; }
-QToolButton#reveal:pressed, QPushButton#open:pressed { background: #dea16a; }
-QToolButton#reveal:disabled { background: #333436; border-color: #38383a; color: #85827e; }
-QPushButton#zoom { color: #e6e3dd; padding: 3px 5px; font-size: 12px; font-weight: 600; }
-QPushButton#zoom:disabled { color: #77736f; }
+QFrame#buttonGroup { background: #292a2c; border: 1px solid #454548; border-radius: 7px; }
+QToolButton#zoom { font-size: 12px; font-weight: 600; }
 QScrollBar:vertical { background: #232426; width: 6px; }
 QScrollBar::handle:vertical { background: #515052; min-height: 26px; border-radius: 3px; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
 QToolTip { background: #343436; color: #efeee9; border: 1px solid #595756; padding: 4px; }
 """
 
@@ -144,20 +137,16 @@ class MainWindow(QMainWindow):
         self._had_maximized = False
         self._displayed_path = None
         self._setup_view()
-        self._setup_shortcuts()
         bar = self.statusBar()
         bar.setSizeGripEnabled(False)
-        bar.setStyleSheet("QStatusBar { background: #232426; color: #f1bc86; padding-left: 12px; }")
-        self.undo_trash_button = QPushButton("撤销删除")
-        self.undo_trash_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        undo_key = QKeySequence(QKeySequence.StandardKey.Undo).toString(QKeySequence.SequenceFormat.NativeText)
-        self.undo_trash_button.setToolTip(f"撤销上一次移到回收站（{undo_key}）")
-        self.undo_trash_button.clicked.connect(self.undo_trash)
+        bar.setStyleSheet(BUTTON_STYLE + "QStatusBar { background: #232426; color: #f1bc86; padding-left: 12px; }")
+        self.undo_trash_button = ToolButton(None, "撤销上一次删除", self.undo_trash, text="撤销删除")
         bar.addPermanentWidget(self.undo_trash_button)
         self.undo_trash_button.hide()
         bar.hide()
         bar.messageChanged.connect(lambda text: bar.setVisible(bool(text)))
-        self._show_state("打开一张图片", "也可以将图片拖到这里。", open_button=True)
+        self._setup_shortcuts()
+        self._show_state("打开一张图片", self._open_hint)
         self._update_navigation()
 
     def _setup_view(self):
@@ -171,10 +160,10 @@ class MainWindow(QMainWindow):
 
         header = QFrame()
         header.setObjectName("header")
-        header.setFixedHeight(62)
+        header.setFixedHeight(60)
         top = QHBoxLayout(header)
-        top.setContentsMargins(20, 0, 18, 0)
-        top.setSpacing(8)
+        top.setContentsMargins(16, 0, 14, 0)
+        top.setSpacing(4)
         logo = QLabel()
         app_icon = QApplication.windowIcon()
         if app_icon.isNull():
@@ -184,33 +173,31 @@ class MainWindow(QMainWindow):
         brand = QLabel("HiFine")
         brand.setObjectName("brand")
         top.addWidget(brand)
-        top.addSpacing(11)
+        top.addSpacing(8)
         top.addWidget(divider(True))
-        top.addSpacing(9)
+        top.addSpacing(8)
+        identity = QVBoxLayout()
+        identity.setSpacing(0)
+        identity.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        self.filename = ElidedLabel("filename")
         self.location = ElidedLabel("location")
-        top.addWidget(self.location, 1)
-        self.reveal_button = tool_button("folder", "在文件管理器中显示当前图片（回车键）",
-                                         self._reveal_current_file, text="打开文件位置", color="#342519")
-        self.reveal_button.setObjectName("reveal")
-        enter_hint = QLabel("Enter")
-        enter_hint.setObjectName("keyHint")
-        enter_hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        hint_layout = QHBoxLayout(self.reveal_button)
-        hint_layout.setContentsMargins(0, 0, 9, 0)
-        hint_layout.addWidget(enter_hint, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        identity.addWidget(self.filename)
+        identity.addWidget(self.location)
+        top.addLayout(identity, 1)
+        self.favorite_button = ToolButton("star", "切换当前照片星标", self._toggle_favorite, checkable=True)
+        self._favorite_icons = (self.favorite_button.icon(), glyph("star-filled", "#f0b47b"))
+        top.addWidget(self.favorite_button)
+        self.reveal_button = ToolButton("reveal", "打开文件位置", self._reveal_current_file, text="文件位置")
         top.addWidget(self.reveal_button)
-        top.addSpacing(5)
-        self.info_button = tool_button("panel", "查看或隐藏照片信息（Tab）",
-                                       self._set_info, checkable=True)
+        top.addSpacing(4)
+        top.addWidget(divider(True))
+        top.addSpacing(4)
+        self.info_button = ToolButton("panel", "显示或隐藏照片信息", self._set_info, checkable=True)
         self.info_button.setChecked(True)
         top.addWidget(self.info_button)
-        self.full_button = tool_button("fullscreen", "进入或退出全屏（F11）",
-                                       self._toggle_fullscreen, checkable=True)
+        self.full_button = ToolButton("fullscreen", "进入或退出全屏", self._toggle_fullscreen, checkable=True)
         top.addWidget(self.full_button)
-        self.settings_button = tool_button("settings", "设置", self.show_settings)
-        settings_key = QKeySequence("Ctrl+,")
-        self.settings_button.setShortcut(settings_key)
-        self.settings_button.setToolTip(f"设置（{settings_key.toString(QKeySequence.SequenceFormat.NativeText)}）")
+        self.settings_button = ToolButton("settings", "设置", self.show_settings)
         top.addWidget(self.settings_button)
         layout.addWidget(header)
         layout.addWidget(divider())
@@ -225,17 +212,26 @@ class MainWindow(QMainWindow):
         self.thumbnail_sidebar = QWidget()
         self.thumbnail_sidebar.setObjectName("thumbnailSidebar")
         sidebar = QVBoxLayout(self.thumbnail_sidebar)
-        sidebar.setContentsMargins(0, 0, 0, 0)
-        sidebar.setSpacing(0)
-        self.favorite_filter = tool_button("filter", "只显示当前文件夹中加过星标的照片",
-                                           self._filter_favorites, text="只看星标", checkable=True)
-        self.favorite_filter.setObjectName("favoriteFilter")
+        sidebar.setContentsMargins(4, 5, 4, 5)
+        sidebar.setSpacing(4)
+        self.favorite_filter = ToolButton("filter", "只看星标", self._filter_favorites,
+                                          text="只看星标", checkable=True)
         self.favorite_filter.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         sidebar.addWidget(self.favorite_filter)
         sidebar.addWidget(self.thumbnail_list, 1)
+        self.thumbnail_hint = ToolButton("keyboard", "快捷键", self.show_shortcuts, text="快捷键")
+        self.thumbnail_hint.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self.thumbnail_hint.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        sidebar.addWidget(self.thumbnail_hint)
         body.addWidget(self.thumbnail_sidebar)
+        sidebar_divider = QFrame()
+        sidebar_divider.setObjectName("divider")
+        sidebar_divider.setFixedWidth(1)
+        body.addWidget(sidebar_divider)
         self.stage = QStackedWidget()
         self.canvas = ImageCanvas()
+        # Clicking the star works on the displayed photo, even with multiple thumbnails selected.
+        self.favorite_button.mouse_focus_target = self.canvas
         self.canvas.file_menu_requested.connect(self._show_canvas_file_menu)
         self.stage.addWidget(self.canvas)
         self.state = QWidget()
@@ -257,10 +253,6 @@ class MainWindow(QMainWindow):
         self.state_description.setAlignment(Qt.AlignmentFlag.AlignCenter)
         state_layout.addWidget(self.state_title, 0, Qt.AlignmentFlag.AlignHCenter)
         state_layout.addWidget(self.state_description, 0, Qt.AlignmentFlag.AlignHCenter)
-        self.state_button = QPushButton("打开图片")
-        self.state_button.setObjectName("open")
-        self.state_button.clicked.connect(self.choose_file)
-        state_layout.addWidget(self.state_button, 0, Qt.AlignmentFlag.AlignHCenter)
         state_layout.addStretch()
         self.stage.addWidget(self.state)
         body.addWidget(self.stage, 1)
@@ -276,67 +268,97 @@ class MainWindow(QMainWindow):
         layout.addWidget(divider())
         footer = QFrame()
         footer.setObjectName("footer")
-        footer.setFixedHeight(53)
+        footer.setFixedHeight(54)
         bottom = QHBoxLayout(footer)
-        bottom.setContentsMargins(13, 0, 17, 0)
-        bottom.setSpacing(5)
-        self.prev_button = tool_button("left", "上一张（← / ↑）", lambda: self.navigate(-1))
-        self.next_button = tool_button("right", "下一张（→ / ↓）", lambda: self.navigate(1))
-        bottom.addWidget(self.prev_button)
+        bottom.setContentsMargins(12, 0, 12, 0)
+        bottom.setSpacing(10)
+
+        def group(*widgets):
+            frame = QFrame()
+            frame.setObjectName("buttonGroup")
+            row = QHBoxLayout(frame)
+            row.setContentsMargins(3, 2, 3, 2)
+            row.setSpacing(2)
+            for widget in widgets:
+                row.addWidget(widget)
+            bottom.addWidget(frame, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        self.prev_button = ToolButton("left", "上一张", lambda: self.navigate(-1))
+        self.next_button = ToolButton("right", "下一张", lambda: self.navigate(1))
         self.position = QLabel()
         self.position.setObjectName("position")
         self.position.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.position.setMinimumWidth(40)
-        self.thumbnail_list.selectionModel().selectionChanged.connect(self._update_position)
-        bottom.addWidget(self.position)
-        bottom.addWidget(self.next_button)
-        bottom.addSpacing(7)
-        bottom.addWidget(divider(True))
-        bottom.addSpacing(9)
-        self.filename = ElidedLabel("filename")
-        bottom.addWidget(self.filename, 1)
-        self.favorite_button = tool_button("star", "加星标（F）", self._toggle_favorite, checkable=True)
-        self.favorite_button.setFocusProxy(self.canvas)
-        self._favorite_icons = (self.favorite_button.icon(), glyph("star-filled", "#f0b47b"))
-        bottom.addWidget(self.favorite_button)
-        self.play_button = tool_button("pause", "暂停动图（空格）", self._toggle_play)
+        self.play_button = ToolButton("pause", "播放或暂停动图", self._toggle_play)
         self.play_button.hide()
-        bottom.addWidget(self.play_button)
-        self.minus_button = tool_button("minus", "缩小（−）", lambda: self.canvas.zoom_by(1 / 1.2))
-        bottom.addWidget(self.minus_button)
-        self.zoom_button = QPushButton("100%")
+        group(self.prev_button, self.position, self.next_button, self.play_button)
+        self.selection_label = ElidedLabel("selection")
+        self.selection_label.setToolTip("右键选中的缩略图可批量操作")
+        bottom.addWidget(self.selection_label, 1)
+        self.thumbnail_list.selectionModel().selectionChanged.connect(self._update_position)
+        self.minus_button = ToolButton("minus", "缩小", lambda: self.canvas.zoom_by(1 / 1.2))
+        self.zoom_button = ToolButton(None, "原始大小", lambda: self.canvas.set_zoom(1.0), text="100%")
         self.zoom_button.setObjectName("zoom")
-        self.zoom_button.setFixedWidth(56)
-        self.zoom_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.zoom_button.setToolTip("原始大小（1）")
-        self.zoom_button.setAccessibleName("以原始大小查看")
-        self.zoom_button.clicked.connect(lambda: self.canvas.set_zoom(1.0))
-        bottom.addWidget(self.zoom_button)
-        self.plus_button = tool_button("plus", "放大（+）", lambda: self.canvas.zoom_by(1.2))
-        bottom.addWidget(self.plus_button)
-        bottom.addSpacing(5)
-        bottom.addWidget(divider(True))
-        bottom.addSpacing(6)
-        self.fit_button = tool_button("fit", "适应窗口（0）", self.canvas.fit, checkable=True)
-        bottom.addWidget(self.fit_button)
+        self.zoom_button.setFixedWidth(55)
+        self.plus_button = ToolButton("plus", "放大", lambda: self.canvas.zoom_by(1.2))
+        self.fit_button = ToolButton("fit", "适应窗口", self.canvas.fit, checkable=True)
+        group(self.minus_button, self.zoom_button, self.plus_button, divider(True), self.fit_button)
         layout.addWidget(footer)
         self.canvas.zoom_changed.connect(self._set_zoom_label)
         self._set_zoom_label(self.canvas.zoom(), True)
 
     def _setup_shortcuts(self):
-        self._shortcuts = []
+        def bind(sequences, callback, scopes=(), *, repeat=False):
+            unique_keys = dict.fromkeys(QKeySequence(sequence) for sequence in sequences)
+            keys = [key for key in unique_keys if not key.isEmpty()]
+            for parent in scopes or (self,):
+                shortcut = QShortcut(parent)
+                shortcut.setKeys(keys)
+                if scopes:
+                    shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+                shortcut.setAutoRepeat(repeat)
+                shortcut.activated.connect(callback)
+            arrows = {"Left": "←", "Right": "→", "Up": "↑", "Down": "↓"}
+            names = (key.toString(QKeySequence.SequenceFormat.NativeText) for key in keys)
+            return " / ".join(arrows.get(name, name) for name in names)
 
-        def add(sequence, callback, widget=None):
-            shortcut = QShortcut(QKeySequence(sequence), widget or self)
-            if widget is not None:
-                shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-            shortcut.activated.connect(callback)
-            self._shortcuts.append(shortcut)
-            return shortcut
+        def button(rows, control, sequences, scopes=(), *, repeat=False):
+            label = control.accessibleName()
+            hint = bind(sequences, control.click, scopes, repeat=repeat)
+            control.describe(label, hint)
+            rows.append((label, hint))
 
         view = self.thumbnail_list
         keys = QKeySequence.StandardKey
-        hints = []
+        browsing = (view, self.canvas)
+        window_keys, photo_keys, zoom_keys, list_keys = [], [], [], []
+        open_keys = bind((keys.Open,), self.choose_file)
+        self._open_hint = f"将图片拖到这里，或按 {open_keys} 选择文件。"
+        window_keys.append(("打开图片", open_keys))
+        button(window_keys, self.info_button, ("Tab",))
+        button(window_keys, self.full_button, ("F11", keys.FullScreen))
+        window_keys.append(("退出全屏", bind(("Escape",), self._leave_fullscreen)))
+        button(window_keys, self.settings_button, ("Ctrl+,",))
+        button(window_keys, self.thumbnail_hint, ("F1",))
+        window_keys.append(("移到下一个控件", bind(("F6",), self.focusNextChild)))
+        window_keys.append(("移到上一个控件", bind(("Shift+F6",), self.focusPreviousChild)))
+        button(photo_keys, self.prev_button, ("Left", "Up"), repeat=True)
+        button(photo_keys, self.next_button, ("Right", "Down"), repeat=True)
+        button(photo_keys, self.favorite_button, ("F",))
+        button(photo_keys, self.favorite_filter, ("Shift+F",))
+        button(photo_keys, self.reveal_button, ("Return", "Enter"), browsing)
+        button(photo_keys, self.play_button, ("Space",), browsing)
+        photo_keys.append(("移到回收站（画布）", bind((keys.Delete,), self._trash_displayed, (self.canvas,))))
+        undo_keys = bind((keys.Undo,), self.undo_trash)
+        self.undo_trash_button.describe("撤销上一次删除", undo_keys)
+        photo_keys.append((self.undo_trash_button.accessibleName(), undo_keys))
+        button(zoom_keys, self.plus_button, ("+", "=", keys.ZoomIn), repeat=True)
+        button(zoom_keys, self.minus_button, ("-", keys.ZoomOut), repeat=True)
+        button(zoom_keys, self.fit_button, ("0",))
+        button(zoom_keys, self.zoom_button, ("1",))
+        zoom_keys.extend([("围绕指针缩放", "滚轮"), ("切换原始大小与适应窗口", "双击图片")])
+        click = "⌘ + 点击" if sys.platform == "darwin" else "Ctrl + 点击"
+        list_keys.extend([("选中或取消单张", click), ("连续选择", "Shift + 点击")])
         for key, label, callback in (
             (keys.SelectAll, "全选", view.selectAll),
             (keys.Copy, "复制", lambda: self.copy_files(view.selected_paths())),
@@ -344,35 +366,14 @@ class MainWindow(QMainWindow):
             (keys.Paste, "粘贴到当前文件夹", self.paste_files),
             (keys.Delete, "移到回收站", lambda: self.trash_files(view.selected_paths())),
         ):
-            shortcut = add(key, callback, view)
-            if key == keys.Delete:
-                shortcut.setAutoRepeat(False)
-            hints.append((label, shortcut.key().toString(QKeySequence.SequenceFormat.NativeText)))
-        add("F", self.favorite_button.click).setAutoRepeat(False)
-        hints.append(("切换当前照片星标", "F"))
-        self.thumbnail_hint = thumbnail_shortcut_button(view, hints)
-        self.thumbnail_sidebar.layout().addWidget(self.thumbnail_hint)
+            list_keys.append((label, bind((key,), callback, (view,))))
+        self._shortcut_groups = [("窗口", window_keys), ("照片浏览（缩略图或画布）", photo_keys),
+                                 ("缩放", zoom_keys), ("缩略图多选", list_keys)]
 
-        add(QKeySequence.StandardKey.Open, self.choose_file)
-        add(keys.Delete, self._trash_displayed, self.canvas).setAutoRepeat(False)
-        add(keys.Undo, self.undo_trash).setAutoRepeat(False)
-        reveal_shortcut = QShortcut(self.reveal_button)
-        reveal_shortcut.setKeys([QKeySequence("Return"), QKeySequence("Enter")])
-        reveal_shortcut.setAutoRepeat(False)
-        reveal_shortcut.activated.connect(self.reveal_button.click)
-        for key in ("Left", "Up"):
-            add(key, lambda: self.navigate(-1))
-        for key in ("Right", "Down"):
-            add(key, lambda: self.navigate(1))
-        add("Tab", lambda: self.info_button.click())
-        add("F11", self._toggle_fullscreen)
-        add("Escape", self._leave_fullscreen)
-        add("Space", self._toggle_play)
-        add("+", lambda: self.canvas.zoom_by(1.2))
-        add("=", lambda: self.canvas.zoom_by(1.2))
-        add("-", lambda: self.canvas.zoom_by(1 / 1.2))
-        add("0", self.canvas.fit)
-        add("1", lambda: self.canvas.set_zoom(1.0))
+    def show_shortcuts(self):
+        dialog = ShortcutsDialog(self._shortcut_groups, self)
+        dialog.exec()
+        dialog.deleteLater()
 
     def show_settings(self):
         dialog = SettingsDialog(self._settings, self)
@@ -437,11 +438,10 @@ class MainWindow(QMainWindow):
         self.zoom_button.setText(f"{percentage:.1f}%" if percentage < 10 else f"{percentage:.0f}%")
         self.fit_button.setChecked(fitting)
 
-    def _show_state(self, title, description="", open_button=False):
+    def _show_state(self, title, description=""):
         self.state_title.setText(title)
         self.state_description.setText(description)
         self.state_description.setVisible(bool(description))
-        self.state_button.setVisible(open_button)
         self.stage.setCurrentWidget(self.state)
         self._displayed_path = None
         self._update_favorite_button()
@@ -461,9 +461,7 @@ class MainWindow(QMainWindow):
         button.setEnabled(path is not None and path == self.current_path)
         button.setChecked(marked)
         button.setIcon(self._favorite_icons[marked])
-        label = "取消星标（F）" if marked else "加星标（F）"
-        button.setToolTip(label)
-        button.setAccessibleName(label)
+        button.describe("取消星标" if marked else "加星标")
 
     def _toggle_favorite(self, marked):
         path = self._displayed_path
@@ -744,7 +742,7 @@ class MainWindow(QMainWindow):
             if self.favorite_filter.isChecked() and self._folder_files:
                 self._show_state("还没有星标照片", "点「只看星标」返回全部照片，按 F 给喜欢的照片加星标。")
             else:
-                self._show_state("文件夹中没有图片", open_button=True)
+                self._show_state("文件夹中没有图片", self._open_hint)
             self._update_navigation()
             return
 
@@ -871,7 +869,7 @@ class MainWindow(QMainWindow):
         self.info_panel.set_details(path, details)
         if error:
             self.canvas.set_image(QImage(), keep_view=keep_view)
-            self._show_state("无法打开这张图片", error, open_button=True)
+            self._show_state("无法打开这张图片", error)
         else:
             self.stage.setCurrentWidget(self.canvas)
             self._displayed_path = path
@@ -934,10 +932,8 @@ class MainWindow(QMainWindow):
 
     def _movie_state_changed(self, state):
         playing = state == QMovie.MovieState.Running
-        action = "暂停动图（空格）" if playing else "播放动图（空格）"
         self.play_button.setIcon(glyph("pause" if playing else "play"))
-        self.play_button.setToolTip(action)
-        self.play_button.setAccessibleName(action)
+        self.play_button.describe("暂停动图" if playing else "播放动图")
 
     def _toggle_play(self):
         if self._movie is None:
@@ -958,17 +954,20 @@ class MainWindow(QMainWindow):
         self._update_position()
 
     def _update_position(self):
-        text = f"{self._index + 1} / {len(self.files)}" if self.files else "—"
+        self.position.setText(f"{self._index + 1} / {len(self.files)}" if self.files else "—")
         count = sum(span.height() for span in self.thumbnail_list.selectionModel().selection())
-        if count > 1:
-            text += f" · 已选 {count} 张 · 右键批量操作"
-        self.position.setText(text)
+        self.selection_label.set_full_text(f"已选 {count} 张" if count > 1 else "")
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if hasattr(self, "thumbnail_hint"):
+        if hasattr(self, "info_panel"):
+            self.reveal_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+                                                  if self.width() >= 760 else Qt.ToolButtonStyle.ToolButtonIconOnly)
             width = max(105, min(176, round(self.width() * 0.15)))
-            self.thumbnail_sidebar.setFixedWidth(max(width, self.thumbnail_hint.sizeHint().width()))
+            side = self.thumbnail_sidebar
+            margins = side.layout().contentsMargins()
+            tools_width = max(self.favorite_filter.sizeHint().width(), self.thumbnail_hint.sizeHint().width())
+            side.setFixedWidth(max(width, tools_width + margins.left() + margins.right()))
             self.info_panel.setFixedWidth(max(205, min(278, round(self.width() * 0.235))))
 
     def dragEnterEvent(self, event):

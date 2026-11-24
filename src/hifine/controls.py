@@ -1,12 +1,10 @@
 """Small native controls used in HiFine's desktop viewer."""
 
-import sys
-
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
-    QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QScrollArea, QSizePolicy,
-    QToolButton, QVBoxLayout, QWidget, QWidgetAction,
+    QFrame, QGridLayout, QHBoxLayout, QLabel, QScrollArea, QSizePolicy,
+    QToolButton, QVBoxLayout, QWidget,
 )
 
 
@@ -26,9 +24,16 @@ def glyph(name, color="#cfccc6"):
         def line(*coords):
             painter.drawPolyline(QPolygonF([QPointF(x, y) for x, y in coords]))
 
-        if name == "folder":
-            line((3, 18), (3, 6), (9, 6), (11, 8), (20, 8), (20, 10))
-            line((3, 18), (6, 11), (22, 11), (19, 18), (3, 18))
+        if name == "reveal":
+            line((11, 6), (9, 4), (3, 4), (3, 20), (20, 20), (20, 14))
+            line((11, 13), (20, 4))
+            line((14, 4), (20, 4), (20, 10))
+        elif name == "keyboard":
+            painter.drawRoundedRect(QRectF(2, 5, 20, 14), 2, 2)
+            for y in (9, 12):
+                for x in (6, 10, 14, 18):
+                    painter.drawPoint(QPointF(x, y))
+            line((8, 15), (16, 15))
         elif name == "panel":
             painter.drawRoundedRect(QRectF(3, 4, 18, 16), 2, 2)
             line((15, 5), (15, 19))
@@ -81,59 +86,44 @@ def glyph(name, color="#cfccc6"):
     return icon
 
 
-def tool_button(name, title, callback, *, text="", checkable=False, color="#cfccc6"):
-    button = QToolButton()
-    button.setToolTip(title)
-    button.setAccessibleName(title)
-    button.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
-    button.setCursor(Qt.CursorShape.PointingHandCursor)
-    button.setCheckable(checkable)
-    button.setIcon(glyph(name, color))
-    button.setIconSize(QSize(19, 19))
-    button.setMinimumSize(32, 32)
-    if text:
-        button.setText(text)
-        button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-    button.clicked.connect(callback)
-    return button
+class ToolButton(QToolButton):
+    def __init__(self, name, title, callback, *, text="", checkable=False):
+        super().__init__()
+        self._key_hint = ""
+        self.mouse_focus_target = None
+        self.describe(title)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setCheckable(checkable)
+        self.setFixedHeight(34)
+        self.setMinimumWidth(34)
+        if name:
+            self.setIcon(glyph(name))
+            self.setIconSize(QSize(18, 18))
+        if text:
+            self.setText(text)
+            self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon if name
+                                    else Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.clicked.connect(callback)
 
+    def describe(self, title, keys=None):
+        if keys is not None:
+            self._key_hint = keys
+        self.setAccessibleName(title)
+        self.setToolTip(f"{title}（{self._key_hint}）" if self._key_hint else title)
 
-def thumbnail_shortcut_button(view, shortcuts):
-    click = "⌘ + 点击" if sys.platform == "darwin" else "Ctrl + 点击"
-    button = QToolButton(view.parentWidget())
-    button.setObjectName("thumbnailHint")
-    button.setText(f"{click}多选")
-    button.setToolTip("查看缩略图快捷键")
-    button.setAccessibleName(f"{click}多选，查看缩略图快捷键")
-    button.setCursor(Qt.CursorShape.PointingHandCursor)
-    button.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
-    button.setFocusProxy(view)
-    button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-    button.setMinimumHeight(32)
+    def mousePressEvent(self, event):
+        if self.mouse_focus_target is not None and event.button() == Qt.MouseButton.LeftButton:
+            self.mouse_focus_target.setFocus(Qt.FocusReason.MouseFocusReason)
+        super().mousePressEvent(event)
 
-    menu = QMenu(button)
-    menu.setObjectName("thumbnailShortcutMenu")
-    menu.setAccessibleName("缩略图快捷键")
-    card = QWidget()
-    grid = QGridLayout(card)
-    grid.setContentsMargins(14, 12, 14, 12)
-    grid.setHorizontalSpacing(20)
-    grid.setVerticalSpacing(6)
-    title = QLabel("缩略图快捷键")
-    title.setObjectName("sectionTitle")
-    grid.addWidget(title, 0, 0, 1, 2)
-    rows = [("选中或取消单张", click), ("连续选择", "Shift + 点击"), *shortcuts]
-    for row, (description, keys) in enumerate(rows, start=1):
-        grid.addWidget(QLabel(description), row, 0)
-        keycap = QLabel(keys)
-        keycap.setObjectName("keyHint")
-        grid.addWidget(keycap, row, 1, Qt.AlignmentFlag.AlignRight)
-    action = QWidgetAction(menu)
-    action.setDefaultWidget(card)
-    menu.addAction(action)
-    button.setMenu(menu)
-    button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-    return button
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if not event.isAutoRepeat():
+                self.click()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 class ElidedLabel(QLabel):
@@ -189,7 +179,7 @@ class InfoPanel(QFrame):
         header.addStretch()
         hint = QLabel("Tab")
         hint.setObjectName("keyHint")
-        hint.setToolTip("按 Tab 键显示或隐藏照片信息")
+        hint.setToolTip("显示或隐藏照片信息")
         header.addWidget(hint)
         outer.addLayout(header)
         outer.addWidget(divider())

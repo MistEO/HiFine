@@ -167,8 +167,8 @@ class ThumbnailList(QListView):
         super().__init__(parent)
         self.setObjectName("thumbnailList")
         self.setAccessibleName("图片缩略图")
-        self.setStyleSheet("QListView#thumbnailList { background: #232426; border: none;"
-                           " border-right: 1px solid #38383a; }")
+        self.setStyleSheet("QListView#thumbnailList { background: #232426; border: 1px solid transparent; }"
+                           "QListView#thumbnailList:focus { border-color: #74604e; }")
         self.setUniformItemSizes(True)
         self.setMouseTracking(True)
         self.setSelectionMode(QListView.SelectionMode.ExtendedSelection)

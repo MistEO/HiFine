@@ -3,6 +3,7 @@
 from dataclasses import replace
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox, QDialog, QDialogButtonBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
     QLineEdit, QSpinBox, QVBoxLayout,
@@ -21,10 +22,13 @@ QLabel#description { color: #b5b1ac; }
 QSpinBox, QLineEdit { background: #191a1c; border: 1px solid #635f5a; border-radius: 4px;
     padding: 4px 6px; selection-background-color: #f0b47b; selection-color: #251c14; }
 QPushButton { background: #323335; border: 1px solid #535254; border-radius: 5px;
-    padding: 5px 16px; }
+    min-width: 52px; min-height: 24px; padding: 3px 12px; }
 QPushButton:hover { background: #404043; }
-QPushButton#save { background: #f0b47b; border-color: #f1bd8b; color: #251c14; }
+QPushButton:pressed { background: #454443; }
+QPushButton#save { background: #f0b47b; border-color: #f1bd8b; color: #251c14;
+    font-weight: 600; }
 QPushButton#save:hover { background: #fac58f; }
+QPushButton#save:pressed { background: #dea16a; }
 QSpinBox:focus, QLineEdit:focus, QPushButton:focus { border-color: #f1bc86; }
 QPushButton#save:focus { border-color: #fff3e7; }
 """
@@ -58,7 +62,14 @@ class SettingsDialog(QDialog):
         save.setObjectName("save")
         save.setText("保存")
         save.setDefault(True)
-        self.buttons.button(button.Cancel).setText("取消")
+        save_key = QKeySequence(QKeySequence.StandardKey.Save)
+        save.setShortcut(save_key)
+        save.setToolTip(f"保存设置（{save_key.toString(QKeySequence.SequenceFormat.NativeText)}）")
+        cancel = self.buttons.button(button.Cancel)
+        cancel.setText("取消")
+        cancel.setToolTip("取消更改（Esc）")
+        for action in (save, cancel):
+            action.setCursor(Qt.CursorShape.PointingHandCursor)
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
         layout.addWidget(self.buttons)

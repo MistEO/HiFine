@@ -1,7 +1,6 @@
 """Exercise the viewer through Qt key, wheel and pointer events."""
 
 import os
-import sys
 from pathlib import Path
 from threading import Event
 from time import monotonic, sleep
@@ -12,7 +11,9 @@ import pytest
 from PySide6.QtCore import QCoreApplication, QEvent, QPoint, QPointF, QSettings, Qt, QTimer
 from PySide6.QtGui import QContextMenuEvent, QImage, QKeySequence, QMovie, QWheelEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QAbstractButton, QApplication, QDialogButtonBox, QLabel, QLineEdit, QMessageBox
+from PySide6.QtWidgets import (
+    QAbstractButton, QApplication, QDialogButtonBox, QFileDialog, QLabel, QLineEdit, QMessageBox,
+)
 
 from hifine import file_menu, reader
 from hifine.app import SAMPLE
@@ -95,8 +96,9 @@ def test_star_filter_navigation_bulk_copy_and_unmark(app, window, tmp_path):
     assert window.favorite_button.isChecked()
     window.open_file(paths[1])
     finish_read(app, window)
-    QTest.mouseClick(window.favorite_filter, Qt.MouseButton.LeftButton)
+    QTest.keyClick(view, Qt.Key.Key_F, Qt.KeyboardModifier.ShiftModifier)
     finish_read(app, window)
+    assert window.favorite_filter.isChecked()
     assert window.files == [paths[0], paths[2]] and window.current_path == paths[2]
     QTest.keyClick(view, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
     QTest.keyClick(view, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
@@ -226,12 +228,17 @@ def test_settings_save_cancel_and_reopen(app, window, settings_store, tmp_path):
     finish_read(app, window)
     window.canvas.set_zoom(2)
     initial = []
+    tab_moved = []
 
     def edit(entries, mib, cdk, keep_zoom_position, button):
         dialog = app.activeModalWidget()
         initial.append((dialog.cache_max_entries.value(), dialog.cache_max_mib.value(),
                         dialog.mirrorchyan_cdk.text(), dialog.mirrorchyan_cdk.echoMode(),
                         dialog.keep_zoom_position.isChecked()))
+        dialog.cache_max_entries.setFocus()
+        before = dialog.focusWidget()
+        QTest.keyClick(before, Qt.Key.Key_Tab)
+        tab_moved.append(dialog.focusWidget() is not before)
         dialog.cache_max_entries.setValue(entries)
         dialog.cache_max_mib.setValue(mib)
         dialog.mirrorchyan_cdk.setText(cdk)
@@ -250,6 +257,7 @@ def test_settings_save_cancel_and_reopen(app, window, settings_store, tmp_path):
     QTest.mouseClick(window.settings_button, Qt.MouseButton.LeftButton)
     masked = QLineEdit.EchoMode.Password
     assert initial == [(8, 256, "", masked, False), (3, 64, "example-cdk", masked, True)]
+    assert all(tab_moved) and window.info_panel.isVisible()
     assert (cache.max_entries, cache.max_bytes) == (3, 64 * 1024**2)
 
     reopened = MainWindow(settings_store=QSettings(settings_store.fileName(), QSettings.Format.IniFormat))
@@ -299,7 +307,8 @@ def test_multiselection_clipboard_shortcuts_and_menu(app, window, tmp_path, monk
                      view.visualRect(view.model().index(2, 0)).center())
     finish_read(app, window)
     assert view.selected_paths() == [first, last]
-    assert "已选 2 张 · 右键批量操作" in window.position.text()
+    assert window.position.text() == "3 / 3"
+    assert "已选 2 张" in window.selection_label.text()
     calls = []
     monkeypatch.setattr("hifine.viewer.show_file_menu", lambda parent, paths, point: calls.append(paths))
     request_menu(app, view.viewport(), view.visualRect(view.model().index(0, 0)).center())
@@ -331,7 +340,8 @@ def test_multiselection_clipboard_shortcuts_and_menu(app, window, tmp_path, monk
     assert window.current_path == cover
 
 
-def test_thumbnail_shortcut_hint_stays_visible_and_preserves_focus(app, window, tmp_path):
+@pytest.mark.parametrize("via_keyboard", [False, True], ids=["button", "F1"])
+def test_shortcut_help_preserves_thumbnail_selection_and_focus(app, window, tmp_path, via_keyboard):
     paths = [tmp_path / f"{i}.png" for i in range(8)]
     for path in paths:
         Image.new("RGB", (16, 8)).save(path)
@@ -341,8 +351,8 @@ def test_thumbnail_shortcut_hint_stays_visible_and_preserves_focus(app, window, 
     view = window.thumbnail_list
     hint = window.thumbnail_hint
     assert view.verticalScrollBar().value() > 0
-    assert hint.isVisible() and hint.width() == view.width()
-    assert hint.mapTo(window, QPoint()).y() == view.mapTo(window, QPoint(0, view.height())).y()
+    assert hint.isVisible() and hint.text() == "快捷键"
+    assert hint.mapTo(window, QPoint()).y() >= view.mapTo(window, QPoint(0, view.height())).y()
     assert hint.width() >= hint.sizeHint().width()
     previous = view.model().index(len(paths) - 2, 0)
     QTest.mouseClick(view.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ControlModifier,
@@ -350,35 +360,44 @@ def test_thumbnail_shortcut_hint_stays_visible_and_preserves_focus(app, window, 
     finish_read(app, window)
     assert view.selected_paths() == paths[-2:]
 
-    menu = hint.menu()
-    visible_labels = []
+    help_pages = []
 
     def read_hint():
-        card = menu.actions()[0].defaultWidget()
-        visible_labels.append([label.text() for label in card.findChildren(QLabel) if label.isVisible()])
-        QTest.keyClick(menu, Qt.Key.Key_Escape)
+        dialog = app.activeModalWidget()
+        if dialog is not None:
+            title = dialog.windowTitle()
+            labels = [label.text() for label in dialog.findChildren(QLabel)]
+            QTest.keyClick(dialog, Qt.Key.Key_Escape)
+            help_pages.append((title, labels, not dialog.isVisible()))
+            if dialog.isVisible():
+                dialog.reject()
 
-    menu.aboutToShow.connect(lambda: QTimer.singleShot(0, read_hint))
-    QTest.mouseClick(hint, Qt.MouseButton.LeftButton)
-    wait_until(app, lambda: bool(visible_labels))
-    labels, = visible_labels
-    assert labels
-    wait_until(app, lambda: not menu.isVisible())
+    timer = QTimer(window)
+    timer.timeout.connect(read_hint)
+    timer.start(10)
+    if via_keyboard:
+        QTest.keyClick(view, Qt.Key.Key_F1)
+    else:
+        QTest.mouseClick(hint, Qt.MouseButton.LeftButton)
+    wait_until(app, lambda: bool(help_pages))
+    timer.stop()
+    (title, labels, escaped), = help_pages
+    assert title == "快捷键" and escaped
     assert window.focusWidget() is view
     window.activateWindow()
     wait_until(app, view.hasFocus)
-    click = "⌘ + 点击" if sys.platform == "darwin" else "Ctrl + 点击"
-    assert hint.text() == f"{click}多选" and click in labels
     keys = QKeySequence.StandardKey
-    for description, key in (("全选", keys.SelectAll), ("复制", keys.Copy), ("剪切", keys.Cut),
-                             ("粘贴到当前文件夹", keys.Paste), ("移到回收站", keys.Delete)):
-        assert description in labels
-        assert QKeySequence(key).toString(QKeySequence.SequenceFormat.NativeText) in labels
-    assert {"缩略图快捷键", "选中或取消单张", "连续选择", "Shift + 点击"} <= set(labels)
+    for key in (keys.SelectAll, keys.Copy, keys.Cut, keys.Paste, keys.Delete,
+                keys.Open, "Tab", "F6", "Shift+F", "F11"):
+        native = QKeySequence(key).toString(QKeySequence.SequenceFormat.NativeText)
+        assert any(native in label for label in labels)
+    assert any("星标" in label for label in labels)
+    assert any("点击" in label for label in labels)
     assert window.current_path == paths[-2] and view.selected_paths() == paths[-2:]
     QTest.keyClick(app.focusWidget(), Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
     assert view.selected_paths() == paths
-    assert "已选 8 张 · 右键批量操作" in window.position.text()
+    assert window.position.text() == "7 / 8"
+    assert "已选 8 张" in window.selection_label.text()
 
 
 def test_thumbnail_shortcuts_preserve_copying_metadata(app, window, tmp_path):
@@ -392,6 +411,27 @@ def test_thumbnail_shortcuts_preserve_copying_metadata(app, window, tmp_path):
     label.setSelection(0, len(label.text()))
     QTest.keyClick(label, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
     assert app.clipboard().text() == path.name
+
+
+def test_toolbar_click_does_not_target_the_thumbnail_selection(app, window, tmp_path, monkeypatch):
+    first, second = (tmp_path / name for name in ("1.png", "2.png"))
+    for path in (first, second):
+        Image.new("RGB", (8, 8)).save(path)
+    window.open_file(first)
+    finish_read(app, window)
+    view = window.thumbnail_list
+    view.selectAll()
+    deleted = []
+    monkeypatch.setattr(window, "trash_files", deleted.append)
+
+    QTest.mouseClick(window.plus_button, Qt.MouseButton.LeftButton)
+    QTest.keySequence(app.focusWidget(), QKeySequence(QKeySequence.StandardKey.Delete))
+    assert deleted == []
+
+    QTest.mouseClick(window.favorite_button, Qt.MouseButton.LeftButton)
+    assert window.canvas.hasFocus() and view.selected_paths() == [first, second]
+    QTest.keySequence(window.canvas, QKeySequence(QKeySequence.StandardKey.Delete))
+    assert deleted == [[first]]
 
 
 def test_paste_in_bundled_samples_keeps_cut_photo_on_clipboard(app, window, tmp_path):
@@ -676,9 +716,19 @@ def test_keyboard_navigation_details_and_bad_image(app, window, tmp_path):
     assert window.position.text() == "1 / 3"
     assert not window.prev_button.isEnabled()
     assert window.canvas._image.pixelColor(0, 0).red() == 255
-    QTest.keyClick(window, Qt.Key.Key_Tab)
+    window.thumbnail_list.setFocus()
+    QTest.keyClick(window.thumbnail_list, Qt.Key.Key_Tab)
+    assert window.thumbnail_list.hasFocus() and not window.info_panel.isVisible()
+    window.info_button.setFocus()
+    QTest.keyClick(window.info_button, Qt.Key.Key_Tab)
+    assert window.info_button.hasFocus() and window.info_panel.isVisible()
+    QTest.keyClick(window.info_button, Qt.Key.Key_F6)
+    assert not window.info_button.hasFocus()
+    QTest.keyClick(app.focusWidget(), Qt.Key.Key_F6, Qt.KeyboardModifier.ShiftModifier)
+    assert window.info_button.hasFocus() and window.info_panel.isVisible()
+    QTest.keyClick(window.info_button, Qt.Key.Key_Space)
     assert not window.info_panel.isVisible()
-    QTest.keyClick(window, Qt.Key.Key_Tab)
+    QTest.keyClick(window.info_button, Qt.Key.Key_Space)
     assert window.info_panel.isVisible()
     window.settings_button.setFocus()
     QTest.keyClick(window.settings_button, Qt.Key.Key_Right)
@@ -702,9 +752,8 @@ def test_toolbar_and_enter_reveal_the_current_file(app, window, tmp_path, monkey
     revealed = []
     monkeypatch.setattr("hifine.viewer.reveal_files", lambda parent, paths: revealed.extend(paths))
     assert not window.reveal_button.isEnabled()
-    header_buttons = window.reveal_button.parentWidget().findChildren(QAbstractButton)
-    assert all(button.text() != "打开图片" for button in header_buttons)
-    assert window.state_button.isVisible()
+    for button in window.findChildren(QAbstractButton):
+        assert "打开图片" not in (button.text(), button.accessibleName())
     assert window.settings_button.text() == ""
     assert not window.settings_button.icon().isNull()
     assert "设置" in window.settings_button.accessibleName()
@@ -714,20 +763,23 @@ def test_toolbar_and_enter_reveal_the_current_file(app, window, tmp_path, monkey
     first, second = (tmp_path / name for name in ("1.png", "2.png"))
     for photo in (first, second):
         Image.new("RGB", (8, 8)).save(photo)
-    window.open_file(first)
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *args: (str(first), ""))
+    QTest.keySequence(window, QKeySequence(QKeySequence.StandardKey.Open))
     finish_read(app, window)
+    assert window.current_path == first
     button = window.reveal_button
-    hint = button.findChild(QLabel, "keyHint")
-    assert hint.isVisible() and hint.text() == "Enter"
-    point = hint.rect().center()
-    assert window.childAt(hint.mapTo(window, point)) is button
-    QTest.mouseClick(button, Qt.MouseButton.LeftButton, pos=hint.mapTo(button, point))
+    QTest.mouseClick(button, Qt.MouseButton.LeftButton)
     view = window.thumbnail_list
     view.setFocus()
     QTest.keyClick(view, Qt.Key.Key_Return)
     QTest.keyClick(view, Qt.Key.Key_Right)
     QTest.keyClick(view, Qt.Key.Key_Enter, Qt.KeyboardModifier.KeypadModifier)
-    assert revealed == [first, first, second]
+    finish_read(app, window)
+    window.canvas.setFocus()
+    QTest.keyClick(window.canvas, Qt.Key.Key_Return)
+    window.info_button.setFocus()
+    QTest.keyClick(window.info_button, Qt.Key.Key_Return)
+    assert revealed == [first, first, second, second]
 
 
 def test_neighbors_are_decoded_before_navigation_and_reused(app, window, tmp_path, monkeypatch):
@@ -931,12 +983,12 @@ def test_new_folder_opens_while_old_prefetch_is_blocked(app, window, tmp_path, b
     assert window.canvas._image.pixelColor(0, 0).blue() == 255
 
 
-def test_pointer_anchored_zoom_and_drag(app, window):
+def test_pointer_anchored_zoom_and_drag(app, window, tmp_path):
+    path = tmp_path / "photo.png"
+    Image.new("RGB", (3200, 2400), "darkgreen").save(path)
+    window.open_file(path)
+    finish_read(app, window)
     canvas = window.canvas
-    window.stage.setCurrentWidget(canvas)
-    image = QImage(3200, 2400, QImage.Format.Format_RGB32)
-    image.fill(Qt.GlobalColor.darkGreen)
-    canvas.set_image(image)
     QTest.keyClick(window, Qt.Key.Key_1)
     assert canvas.zoom() == 1
     center = QPointF(canvas.width() / 2, canvas.height() / 2)
@@ -1027,10 +1079,15 @@ def test_animated_playback_keeps_zoom(app, window, tmp_path, extension):
         sleep(0.005)
     assert window.canvas.zoom() == 6.0
     assert window.canvas._offset == offset
-    QTest.keyClick(window, Qt.Key.Key_Space)
+    window.thumbnail_list.setFocus()
+    QTest.keyClick(window.thumbnail_list, Qt.Key.Key_Space)
     assert window._movie.state() == QMovie.MovieState.Paused
     QTest.qWait(200)
     assert window.canvas._image.pixelColor(0, 0).green() > 200
+    window.info_button.setFocus()
+    QTest.keyClick(window.info_button, Qt.Key.Key_Space)
+    assert not window.info_panel.isVisible()
+    assert window._movie.state() == QMovie.MovieState.Paused
     window.play_button.click()
     assert window._movie.state() == QMovie.MovieState.Running
     QTest.keyClick(window, Qt.Key.Key_Right)
