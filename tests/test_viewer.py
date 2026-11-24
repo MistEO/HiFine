@@ -413,11 +413,31 @@ def test_paste_in_bundled_samples_keeps_cut_photo_on_clipboard(app, window, tmp_
     assert "目标文件夹" in window.statusBar().currentMessage()
 
 
-def test_trash_selection_then_paste_in_empty_folder(app, window, tmp_path, monkeypatch):
-    folder = tmp_path / "照片"
+@pytest.fixture
+def fake_trash(tmp_path, monkeypatch):
     trash = tmp_path / "回收站"
-    folder.mkdir()
     trash.mkdir()
+
+    class TestTrashFile:
+        def __init__(self, name):
+            self.path = Path(name)
+
+        def moveToTrash(self):
+            self.path = self.path.rename(trash / self.path.name)
+            return True
+
+        def fileName(self):
+            return str(self.path)
+
+    monkeypatch.setattr("hifine.trash.QFile", TestTrashFile)
+    monkeypatch.setattr("hifine.trash._info_path", lambda path: None)
+    return trash
+
+
+def test_trash_selection_then_paste_in_empty_folder(app, window, tmp_path, monkeypatch, fake_trash):
+    folder = tmp_path / "照片"
+    trash = fake_trash
+    folder.mkdir()
     photos = [folder / f"{i}.png" for i in (1, 2)]
     for path in photos:
         Image.new("RGB", (8, 8)).save(path)
@@ -427,15 +447,6 @@ def test_trash_selection_then_paste_in_empty_folder(app, window, tmp_path, monke
     view.setFocus()
     QTest.keyClick(view, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
 
-    class TestTrashFile:
-        def __init__(self, name):
-            self.path = Path(name)
-
-        def moveToTrash(self):
-            self.path.rename(trash / self.path.name)
-            return True
-
-    monkeypatch.setattr("hifine.viewer.QFile", TestTrashFile)
     errors = []
     monkeypatch.setattr(QMessageBox, "exec", lambda dialog: errors.append(dialog.text()))
     answers = iter((QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes))
@@ -451,6 +462,47 @@ def test_trash_selection_then_paste_in_empty_folder(app, window, tmp_path, monke
     QTest.keyClick(view, Qt.Key.Key_V, Qt.KeyboardModifier.ControlModifier)
     wait_until(app, lambda: window.current_path == photos[1] and not window._reads.loading)
     assert view.selected_paths() == [photos[1]]
+
+
+def test_trash_range_continues_with_next_surviving_photo(app, window, tmp_path, monkeypatch, fake_trash):
+    photos = [tmp_path / f"{n}.jpg" for n in range(5)]
+    for path in photos:
+        Image.new("RGB", (8, 8)).save(path)
+    window.open_file(photos[1])
+    finish_read(app, window)
+    view = window.thumbnail_list
+    view.set_selected_paths(photos[:2])
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Yes)
+    QTest.keyClick(view, Qt.Key.Key_Delete)
+    wait_until(app, lambda: window.files == photos[2:] and not window._reads.loading)
+    assert window._displayed_path == photos[2]
+
+
+def test_canvas_delete_uses_displayed_photo_and_undo(app, window, tmp_path, monkeypatch, fake_trash):
+    photos = [tmp_path / f"{i}.png" for i in range(3)]
+    for path in photos:
+        Image.new("RGB", (16, 16), "red").save(path)
+    trash = fake_trash
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: pytest.fail("unexpected confirmation"))
+    window.open_file(photos[1])
+    finish_read(app, window)
+    window.thumbnail_list.selectAll()
+    QTest.mouseClick(window.canvas, Qt.MouseButton.LeftButton)
+    QTest.keyClick(window.canvas, Qt.Key.Key_Delete)
+    wait_until(app, lambda: window._displayed_path == photos[2])
+    assert window.files == [photos[0], photos[2]]
+    assert window.undo_trash_button.isVisible()
+    QTest.mouseClick(window.undo_trash_button, Qt.MouseButton.LeftButton)
+    wait_until(app, lambda: window.files == photos)
+    assert window.current_path == photos[2] and not window.undo_trash_button.isVisible()
+    assert not list(trash.iterdir())
+    window.canvas.setFocus()
+    QTest.keyClick(window.canvas, Qt.Key.Key_Delete)
+    wait_until(app, lambda: window._displayed_path == photos[1])
+    undo = QKeySequence(QKeySequence.StandardKey.Undo)
+    QTest.keySequence(window.canvas, undo)
+    wait_until(app, lambda: window.files == photos)
+    assert not list(trash.iterdir())
 
 
 def test_canvas_menu_uses_visible_pixels_during_navigation(app, window, blocked_prefetch, monkeypatch):

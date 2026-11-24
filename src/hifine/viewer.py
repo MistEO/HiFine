@@ -23,6 +23,7 @@ from .reader import ImageReader
 from .settings import AppSettings
 from .settings_dialog import SettingsDialog
 from .thumbnails import ThumbnailList
+from .trash import TrashEntryChanged, move_to_trash, restore_from_trash
 from .updates import UpdateChecker
 
 
@@ -130,6 +131,7 @@ class MainWindow(QMainWindow):
         self._menu_versions = {}
         self._menu_scan = None
         self._file_busy = False
+        self._trash_history = []
         self._close_after_operation = False
         self._file_operation_finished.connect(self._finish_file_operation)
         QApplication.instance().aboutToQuit.connect(self._reads.shutdown)
@@ -146,6 +148,13 @@ class MainWindow(QMainWindow):
         bar = self.statusBar()
         bar.setSizeGripEnabled(False)
         bar.setStyleSheet("QStatusBar { background: #232426; color: #f1bc86; padding-left: 12px; }")
+        self.undo_trash_button = QPushButton("撤销删除")
+        self.undo_trash_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        undo_key = QKeySequence(QKeySequence.StandardKey.Undo).toString(QKeySequence.SequenceFormat.NativeText)
+        self.undo_trash_button.setToolTip(f"撤销上一次移到回收站（{undo_key}）")
+        self.undo_trash_button.clicked.connect(self.undo_trash)
+        bar.addPermanentWidget(self.undo_trash_button)
+        self.undo_trash_button.hide()
         bar.hide()
         bar.messageChanged.connect(lambda text: bar.setVisible(bool(text)))
         self._show_state("打开一张图片", "也可以将图片拖到这里。", open_button=True)
@@ -336,6 +345,8 @@ class MainWindow(QMainWindow):
             (keys.Delete, "移到回收站", lambda: self.trash_files(view.selected_paths())),
         ):
             shortcut = add(key, callback, view)
+            if key == keys.Delete:
+                shortcut.setAutoRepeat(False)
             hints.append((label, shortcut.key().toString(QKeySequence.SequenceFormat.NativeText)))
         add("F", self.favorite_button.click).setAutoRepeat(False)
         hints.append(("切换当前照片星标", "F"))
@@ -343,6 +354,8 @@ class MainWindow(QMainWindow):
         self.thumbnail_sidebar.layout().addWidget(self.thumbnail_hint)
 
         add(QKeySequence.StandardKey.Open, self.choose_file)
+        add(keys.Delete, self._trash_displayed, self.canvas).setAutoRepeat(False)
+        add(keys.Undo, self.undo_trash).setAutoRepeat(False)
         reveal_shortcut = QShortcut(self.reveal_button)
         reveal_shortcut.setKeys([QKeySequence("Return"), QKeySequence("Enter")])
         reveal_shortcut.setAutoRepeat(False)
@@ -522,31 +535,76 @@ class MainWindow(QMainWindow):
 
         self._run_file_operation(folder, "正在粘贴图片…", paste, finish)
 
+    def _trash_displayed(self):
+        if self._displayed_path is not None:
+            self.trash_files([self._displayed_path])
+
     def trash_files(self, paths):
         if self._file_busy or not paths:
             return
-        target = paths[0].name if len(paths) == 1 else f"选中的 {len(paths)} 张图片"
-        answer = QMessageBox.question(self, "移到回收站", f"将{target}移到回收站？",
-                                      QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                                      QMessageBox.StandardButton.No)
-        if answer != QMessageBox.StandardButton.Yes:
+        if any(self._is_sample(path) for path in paths):
+            self.statusBar().showMessage("示例照片保留在安装目录中。", 5000)
             return
+        if len(paths) > 1:
+            answer = QMessageBox.question(self, "移到回收站", f"将选中的 {len(paths)} 张图片移到回收站？",
+                                          QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                          QMessageBox.StandardButton.No)
+            if answer != QMessageBox.StandardButton.Yes:
+                return
 
         def trash():
-            errors = []
+            records, errors = [], []
             for path in paths:
-                file = QFile(str(path))
-                if not path.is_file():
-                    errors.append(f"{path.name}：文件已不存在或不是普通文件")
-                elif not file.moveToTrash():
-                    errors.append(f"{path.name}：{file.errorString()}")
-            return errors
+                try:
+                    record = move_to_trash(path)
+                    if record is not None:
+                        records.append(record)
+                except OSError as exc:
+                    errors.append(f"{path.name}：{exc}")
+            return records, errors
 
-        self._run_file_operation(paths[0].parent, "正在将图片移到回收站…", trash,
-                                 lambda errors: (f"已将 {len(paths) - len(errors)} 张图片移到回收站", errors))
+        def finish(result):
+            records, errors = result
+            moved = len(paths) - len(errors)
+            if records:
+                self._trash_history.append(records)
+            elif moved:
+                self._trash_history.clear()
+            message = f"已将 {moved} 张图片移到回收站"
+            if moved > len(records):
+                message += f"，其中 {moved - len(records)} 张请从系统回收站还原"
+            return message, errors
+
+        self._run_file_operation(paths[0].parent, "正在将图片移到回收站…", trash, finish)
+
+    def undo_trash(self):
+        if self._file_busy or not self._trash_history:
+            return
+        records = self._trash_history[-1]
+
+        def restore():
+            pending, errors = [], []
+            for record in records:
+                try:
+                    restore_from_trash(record)
+                except OSError as exc:
+                    errors.append(f"{record.original.name}：{exc}")
+                    if not isinstance(exc, TrashEntryChanged):
+                        pending.append(record)
+            return pending, errors
+
+        def finish(result):
+            pending, errors = result
+            self._trash_history.pop()
+            if pending:
+                self._trash_history.append(pending)
+            return f"已还原 {len(records) - len(errors)} 张图片", errors
+
+        self._run_file_operation(records[0].original.parent, "正在还原图片…", restore, finish)
 
     def _run_file_operation(self, folder, message, work, finish):
         self._file_busy = True
+        self.undo_trash_button.setEnabled(False)
         self.statusBar().showMessage(message)
 
         def run():
@@ -566,6 +624,8 @@ class MainWindow(QMainWindow):
             self._watch_folder()
             self._menu_refresh.start()
         message, errors = ("文件操作失败", [error]) if error else finish(result)
+        self.undo_trash_button.setEnabled(bool(self._trash_history))
+        self.undo_trash_button.setVisible(bool(self._trash_history))
         self.statusBar().showMessage(message, 5000)
         if errors:
             dialog = QMessageBox(QMessageBox.Icon.Warning, "文件操作", f"{len(errors)} 项操作失败\n{errors[0]}",
@@ -696,7 +756,10 @@ class MainWindow(QMainWindow):
                               if p in self._favorites), files[-1])
             self._index = files.index(next_path)
         else:
-            self._index = min(max(self._index, 0), len(files) - 1)
+            visible = set(files)
+            fallback = files[-1] if previous_files else files[0]
+            successor = next((p for p in previous_files[max(0, self._index):] if p in visible), fallback)
+            self._index = files.index(successor)
         path = files[self._index]
         loading = self._reads.loading
         if loading:
