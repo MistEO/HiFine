@@ -80,12 +80,15 @@ def request_menu(app, widget, point):
 
 
 def test_star_filter_navigation_bulk_copy_and_unmark(app, window, tmp_path):
+    window.resize(600, 380)
     paths = [tmp_path / f"{n}.jpg" for n in range(4)]
     for path in paths:
         Image.new("RGB", (8, 8)).save(path)
     window.open_file(paths[0])
     finish_read(app, window)
     view = window.thumbnail_list
+    assert window.favorite_filter.parentWidget().objectName() == "footer"
+    assert window.favorite_filter.width() >= window.favorite_filter.sizeHint().width()
     # A second window may already have starred the photo since this one loaded.
     window._favorite_store.set_favorite(paths[0], True)
     QTest.keyClick(view, Qt.Key.Key_F)
@@ -385,11 +388,12 @@ def test_shortcut_help_preserves_thumbnail_selection_and_focus(app, window, tmp_
     window.open_file(paths[-1])
     finish_read(app, window)
     view = window.thumbnail_list
-    hint = window.thumbnail_hint
+    button = window.shortcuts_button
     assert view.verticalScrollBar().value() > 0
-    assert hint.isVisible() and hint.text() == "快捷键"
-    assert hint.mapTo(window, QPoint()).y() >= view.mapTo(window, QPoint(0, view.height())).y()
-    assert hint.width() >= hint.sizeHint().width()
+    assert view.height() == window.stage.height()
+    assert button.parentWidget() is window.settings_button.parentWidget()
+    assert button.isVisible() and not button.icon().isNull()
+    assert button.accessibleName() == "快捷键" and "F1" in button.toolTip()
     previous = view.model().index(len(paths) - 2, 0)
     QTest.mouseClick(view.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ControlModifier,
                      view.visualRect(previous).center())
@@ -414,7 +418,7 @@ def test_shortcut_help_preserves_thumbnail_selection_and_focus(app, window, tmp_
     if via_keyboard:
         QTest.keyClick(view, Qt.Key.Key_F1)
     else:
-        QTest.mouseClick(hint, Qt.MouseButton.LeftButton)
+        QTest.mouseClick(button, Qt.MouseButton.LeftButton)
     wait_until(app, lambda: bool(help_pages))
     timer.stop()
     (title, labels, escaped), = help_pages

@@ -10,7 +10,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QColorSpace, QDesktopServices, QGuiApplication, QImage, QKeySequence, QMovie, QShortcut, QTransform
 from PySide6.QtWidgets import (
     QApplication, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
-    QMessageBox, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget,
+    QMessageBox, QStackedWidget, QVBoxLayout, QWidget,
 )
 
 from .canvas import ImageCanvas
@@ -58,7 +58,6 @@ QLabel#sectionTitle { font-size: 12px; font-weight: 600; color: #f1bc86; }
 QTextEdit#metaValue { color: #dfddd8; background: transparent; }
 QLabel#filename { color: #f4f1ec; font-size: 14px; font-weight: 600; }
 QTextEdit#stateDescription { color: #a8a5a0; background: transparent; }
-QWidget#thumbnailSidebar { background: #232426; }
 QFrame#buttonGroup { background: #292a2c; border: 1px solid #454548; border-radius: 7px; }
 QToolButton#zoom { font-size: 12px; font-weight: 600; }
 QScrollBar:vertical { background: #232426; width: 6px; }
@@ -198,6 +197,9 @@ class MainWindow(QMainWindow):
         top.addWidget(self.info_button)
         self.full_button = ToolButton("fullscreen", "进入或退出全屏", self._toggle_fullscreen, checkable=True)
         top.addWidget(self.full_button)
+        self.shortcuts_button = ToolButton("keyboard", "快捷键", self.show_shortcuts)
+        self.shortcuts_button.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        top.addWidget(self.shortcuts_button)
         self.settings_button = ToolButton("settings", "设置", self.show_settings)
         top.addWidget(self.settings_button)
         layout.addWidget(header)
@@ -210,21 +212,7 @@ class MainWindow(QMainWindow):
         self.thumbnail_list.row_requested.connect(self._go_to)
         self.thumbnail_list.file_menu_requested.connect(self._show_file_menu)
         QApplication.instance().aboutToQuit.connect(self.thumbnail_list.shutdown)
-        self.thumbnail_sidebar = QWidget()
-        self.thumbnail_sidebar.setObjectName("thumbnailSidebar")
-        sidebar = QVBoxLayout(self.thumbnail_sidebar)
-        sidebar.setContentsMargins(4, 5, 4, 5)
-        sidebar.setSpacing(4)
-        self.favorite_filter = ToolButton("filter", "只看星标", self._filter_favorites,
-                                          text="只看星标", checkable=True)
-        self.favorite_filter.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        sidebar.addWidget(self.favorite_filter)
-        sidebar.addWidget(self.thumbnail_list, 1)
-        self.thumbnail_hint = ToolButton("keyboard", "快捷键", self.show_shortcuts, text="快捷键")
-        self.thumbnail_hint.setFocusPolicy(Qt.FocusPolicy.TabFocus)
-        self.thumbnail_hint.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        sidebar.addWidget(self.thumbnail_hint)
-        body.addWidget(self.thumbnail_sidebar)
+        body.addWidget(self.thumbnail_list)
         sidebar_divider = QFrame()
         sidebar_divider.setObjectName("divider")
         sidebar_divider.setFixedWidth(1)
@@ -294,6 +282,9 @@ class MainWindow(QMainWindow):
         self.play_button = ToolButton("pause", "播放或暂停动图", self._toggle_play)
         self.play_button.hide()
         group(self.prev_button, self.position, self.next_button, self.play_button)
+        self.favorite_filter = ToolButton("filter", "只看星标", self._filter_favorites,
+                                          text="只看星标", checkable=True)
+        bottom.addWidget(self.favorite_filter)
         self.selection_label = ElidedLabel("selection")
         self.selection_label.setToolTip("右键选中的缩略图可批量操作")
         bottom.addWidget(self.selection_label, 1)
@@ -341,7 +332,7 @@ class MainWindow(QMainWindow):
         button(window_keys, self.full_button, ("F11", keys.FullScreen))
         window_keys.append(("退出全屏", bind(("Escape",), self._leave_fullscreen)))
         button(window_keys, self.settings_button, ("Ctrl+,",))
-        button(window_keys, self.thumbnail_hint, ("F1",))
+        button(window_keys, self.shortcuts_button, ("F1",))
         window_keys.append(("移到下一个控件", bind(("F6",), self.focusNextChild)))
         window_keys.append(("移到上一个控件", bind(("Shift+F6",), self.focusPreviousChild)))
         button(photo_keys, self.prev_button, ("Left", "Up"), repeat=True)
@@ -963,11 +954,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "info_panel"):
             self.reveal_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon
                                                   if self.width() >= 760 else Qt.ToolButtonStyle.ToolButtonIconOnly)
-            width = max(105, min(176, round(self.width() * 0.15)))
-            side = self.thumbnail_sidebar
-            margins = side.layout().contentsMargins()
-            tools_width = max(self.favorite_filter.sizeHint().width(), self.thumbnail_hint.sizeHint().width())
-            side.setFixedWidth(max(width, tools_width + margins.left() + margins.right()))
+            self.thumbnail_list.setFixedWidth(max(105, min(176, round(self.width() * 0.15))))
             self.info_panel.setFixedWidth(max(205, min(278, round(self.width() * 0.235))))
 
     def dragEnterEvent(self, event):
