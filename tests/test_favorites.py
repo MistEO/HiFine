@@ -1,13 +1,9 @@
 from concurrent.futures import ThreadPoolExecutor
-import os
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication
 
 from hifine.favorites import FavoriteStore
-from hifine.thumbnails import ThumbnailList
 
 
 def test_browsing_does_not_create_database(tmp_path):
@@ -84,24 +80,3 @@ def test_database_error_is_reported_without_touching_the_photo(tmp_path):
     with pytest.raises(OSError):
         store.in_folder(tmp_path)
     assert photo.read_bytes() == b"photo"
-
-
-def test_thumbnail_marks_preserve_selection_and_follow_files(tmp_path):
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    app = QApplication.instance() or QApplication([])
-    view = ThumbnailList()
-    files = [tmp_path / "a.png", tmp_path / "b.png"]
-    view.set_files(files)
-    view.selectAll()
-    view.set_favorites({files[1]})
-    model = view.model()
-    assert model.index(0).data(Qt.ItemDataRole.AccessibleTextRole) == "a.png"
-    assert model.index(1).data(Qt.ItemDataRole.AccessibleTextRole) == "b.png · 已加星标"
-    assert view.selected_paths() == files
-    view.set_files(list(reversed(files)))
-    assert model.index(0).data(Qt.ItemDataRole.ToolTipRole) == "b.png · 已加星标"
-    view.set_favorites([])
-    assert model.index(0).data(Qt.ItemDataRole.ToolTipRole) == "b.png"
-    view.close()
-    view.shutdown()
-    app.processEvents()

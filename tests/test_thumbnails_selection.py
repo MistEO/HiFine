@@ -2,7 +2,7 @@ import os
 
 from PIL import Image
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QContextMenuEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
@@ -26,6 +26,8 @@ def thumbnails(tmp_path):
     yield view, files
     view.close()
     view.shutdown()
+    view.deleteLater()
+    app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
 def point_for(view, row):
@@ -91,3 +93,18 @@ def test_selection_survives_folder_refresh_by_path(thumbnails):
     view.select_row(0)
     assert view.currentIndex().row() == 0
     assert view.selected_paths() == []
+
+
+def test_thumbnail_marks_preserve_selection_and_follow_files(thumbnails):
+    view, files = thumbnails
+    marked = files[-1]
+    view.selectAll()
+    view.set_favorites({marked})
+    model = view.model()
+    assert model.index(0).data(Qt.ItemDataRole.AccessibleTextRole) == files[0].name
+    assert model.index(len(files) - 1).data(Qt.ItemDataRole.AccessibleTextRole) == f"{marked.name} · 已加星标"
+    assert view.selected_paths() == files
+    view.set_files(list(reversed(files)))
+    assert model.index(0).data(Qt.ItemDataRole.ToolTipRole) == f"{marked.name} · 已加星标"
+    view.set_favorites([])
+    assert model.index(0).data(Qt.ItemDataRole.ToolTipRole) == marked.name
