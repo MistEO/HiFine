@@ -42,4 +42,4 @@ in CPython/LICENSE.txt. The launcher and runtime hook terms, including the
 PyInstaller bootloader exception, are in pyinstaller-6.22.3.dist-info/licenses.
 The packaging library used to compare versions supplies its license texts
 in packaging-26.3.dist-info/licenses.
-The sample photograph's credit and source are in hifine/assets/NOTICE.txt.
+Credits and sources for the sample photographs are in hifine/assets/NOTICE.txt.

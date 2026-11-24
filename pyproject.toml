@@ -25,7 +25,7 @@ hifine = "hifine.app:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-hifine = ["assets/*.png", "assets/*.txt", "assets/samples/*.hif"]
+hifine = ["assets/*.png", "assets/*.txt", "assets/samples/*.hif", "assets/samples/*.jpg"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

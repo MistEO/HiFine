@@ -13,6 +13,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialogButtonBox, QLineEdit
 
 from hifine import file_menu, reader
+from hifine.app import SAMPLE
 from hifine.settings import AppSettings
 from hifine.viewer import MainWindow
 
@@ -30,7 +31,7 @@ def settings_store(tmp_path):
 
 @pytest.fixture()
 def window(app, settings_store):
-    widget = MainWindow(settings_store=settings_store)
+    widget = MainWindow(sample_path=SAMPLE, settings_store=settings_store)
     widget.show()
     widget.activateWindow()
     app.processEvents()
@@ -60,6 +61,18 @@ def thumbnail_color(row):
 
 def request_menu(app, widget, point):
     app.sendEvent(widget, QContextMenuEvent(QContextMenuEvent.Reason.Mouse, point, widget.mapToGlobal(point)))
+
+
+def test_open_sample_shows_three_bundled_thumbnails(app, window):
+    window.open_sample()
+    finish_read(app, window)
+    view = window.thumbnail_list
+    model = view.model()
+    assert window.current_path == SAMPLE
+    assert view.currentIndex().data() == SAMPLE.name
+    assert model.rowCount() == 3
+    rows = [model.index(row, 0) for row in range(3)]
+    wait_until(app, lambda: all(thumbnail_color(row) for row in rows))
 
 
 def test_settings_save_cancel_and_reopen(app, window, settings_store, tmp_path):
