@@ -168,8 +168,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          notes="docs/releases/$TAG.md"
-          test -s "$notes"
+          source_notes="docs/releases/$TAG.md"
+          test -s "$source_notes"
+          notes="$RUNNER_TEMP/release-notes.md"
+          footer='[已有 Mirror酱 CDK？前往 Mirror酱 高速下载](https://mirrorchyan.com/zh/projects?rid=HiFine&source=hifine_release)'
+          body=$(awk -v footer="$footer" '$0 != footer' "$source_notes")
+          printf '%s\n\n%s\n' "$body" "$footer" > "$notes"
           if gh release view "$TAG" --json isDraft > "$RUNNER_TEMP/release-state.json" 2>/dev/null; then
             jq -e '.isDraft' "$RUNNER_TEMP/release-state.json" >/dev/null
           else
