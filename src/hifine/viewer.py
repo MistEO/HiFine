@@ -1,8 +1,9 @@
 """HiFine's desktop window and image navigation."""
 
+import os
 from pathlib import Path
 
-from PySide6.QtCore import QDir, QFileSystemWatcher, QSize, QStandardPaths, Qt, QTimer, QUrl, Slot
+from PySide6.QtCore import QDir, QFile, QFileSystemWatcher, QSize, QStandardPaths, Qt, QTimer, QUrl, Slot
 from PySide6.QtGui import QColorSpace, QDesktopServices, QGuiApplication, QImage, QKeySequence, QMovie, QShortcut, QTransform
 from PySide6.QtWidgets import (
     QApplication, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
@@ -54,6 +55,25 @@ QScrollBar::handle:vertical { background: #515052; min-height: 26px; border-radi
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
 QToolTip { background: #343436; color: #efeee9; border: 1px solid #595756; padding: 4px; }
 """
+
+
+def _open_movie(path, parent):
+    if os.name != "nt":
+        return QMovie(str(path), parent=parent)
+
+    from .windows_files import open_image_fd
+
+    movie = QMovie(parent)
+    device = QFile(movie)
+    try:
+        fd = open_image_fd(path)
+    except OSError:
+        return movie
+    if device.open(fd, QFile.OpenModeFlag.ReadOnly, QFile.FileHandleFlag.AutoCloseHandle):
+        movie.setDevice(device)
+    else:
+        os.close(fd)
+    return movie
 
 
 class MainWindow(QMainWindow):
@@ -543,7 +563,7 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     def _start_animation(self, path, orientation):
-        movie = QMovie(str(path), parent=self)
+        movie = _open_movie(path, self)
         if not movie.isValid():
             movie.deleteLater()
             return

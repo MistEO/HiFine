@@ -119,3 +119,20 @@ def test_navigation_includes_broken_files(tmp_path):
     for reader in [load_image, lambda p: make_thumbnail(p, 64)]:
         with pytest.raises(ImageLoadError):
             reader(tmp_path / names[1])
+
+
+@pytest.mark.parametrize("decode", [load_image, lambda path: make_thumbnail(path, 64)])
+def test_image_can_be_moved_during_decode(tmp_path, monkeypatch, decode):
+    photo = tmp_path / "照片.png"
+    moved = tmp_path / "moved.png"
+    Image.new("RGB", (8, 8)).save(photo)
+    open_image = Image.open
+
+    def move_while_open(*args, **kwargs):
+        image = open_image(*args, **kwargs)
+        photo.rename(moved)
+        moved.rename(photo)
+        return image
+
+    monkeypatch.setattr(Image, "open", move_while_open)
+    decode(photo)

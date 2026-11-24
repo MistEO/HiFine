@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import io
 import math
+import os
 import re
 import struct
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -117,11 +119,23 @@ def _display_pixels(image: Image.Image) -> Image.Image:
     return image.convert(mode)
 
 
+@contextmanager
+def _open_image(path):
+    if os.name == "nt":
+        from .windows_files import open_image_fd
+
+        source = os.fdopen(open_image_fd(path), "rb")
+    else:
+        source = nullcontext(path)
+    with source as file, Image.open(file, formats=_FORMATS) as image:
+        yield image
+
+
 def load_image(path: str | Path, *, max_pixel_bytes: int | None = None) -> LoadedImage:
     """Decode the primary HEIF image or the first frame of other image formats."""
     path = Path(path)
     try:
-        with Image.open(path, formats=_FORMATS) as source:
+        with _open_image(path) as source:
             if max_pixel_bytes is not None:
                 channels = 4 if source.has_transparency_data else 3
                 if source.width * source.height * channels > max_pixel_bytes:
@@ -155,7 +169,7 @@ def make_thumbnail(path: str | Path, max_size: int) -> Image.Image:
         raise ValueError("max_size must be positive")
     path = Path(path)
     try:
-        with Image.open(path, formats=_FORMATS) as source:
+        with _open_image(path) as source:
             # Ask JPEG and HEIF decoders for reduced pixels before loading the full image.
             source.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
             ImageOps.exif_transpose(source, in_place=True)

@@ -593,3 +593,18 @@ def test_animated_playback_keeps_zoom(app, window, tmp_path, extension):
     finish_read(app, window)
     assert window._movie.state() == QMovie.MovieState.Running
     assert window.play_button.isVisible()
+
+
+@pytest.mark.parametrize("extension", ["gif", "webp"])
+def test_playing_image_can_be_moved(app, window, tmp_path, extension):
+    photo = tmp_path / f"动画.{extension}"
+    frames = [Image.new("RGB", (16, 8), color) for color in ("red", "lime")]
+    frames[0].save(photo, save_all=True, append_images=frames[1:], duration=140, loop=0, lossless=True)
+    window.open_file(photo)
+    finish_read(app, window)
+    movie = window._movie
+    assert movie.state() == QMovie.MovieState.Running
+    photo.rename(tmp_path / f"moved.{extension}")
+    frame = movie.currentFrameNumber()
+    wait_until(app, lambda: movie.currentFrameNumber() != frame)
+    assert movie.state() == QMovie.MovieState.Running
