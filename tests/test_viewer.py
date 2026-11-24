@@ -260,7 +260,7 @@ def test_settings_descriptions_fit_when_dialog_is_shrunk(app, window):
     dialog.close()
 
 
-def test_settings_save_cancel_and_reopen(app, window, settings_store, tmp_path):
+def test_settings_save_cancel_and_reopen(app, window, settings_store, tmp_path, monkeypatch):
     photo = tmp_path / "photo.png"
     Image.new("RGB", (32, 16), "red").save(photo)
     window.open_file(photo)
@@ -268,6 +268,8 @@ def test_settings_save_cancel_and_reopen(app, window, settings_store, tmp_path):
     window.canvas.set_zoom(2)
     initial = []
     tab_moved = []
+    checks = []
+    monkeypatch.setattr(window._updates, "start", lambda cdk, *, interactive: checks.append((cdk, interactive)))
 
     def edit(entries, mib, cdk, keep_zoom_position, button):
         dialog = app.activeModalWidget()
@@ -298,6 +300,8 @@ def test_settings_save_cancel_and_reopen(app, window, settings_store, tmp_path):
     assert initial == [(8, 256, "", masked, False), (3, 64, "example-cdk", masked, True)]
     assert all(tab_moved) and window.info_panel.isVisible()
     assert (cache.max_entries, cache.max_bytes) == (3, 64 * 1024**2)
+    QTimer.singleShot(0, lambda: edit(3, 64, " example-cdk ", True, buttons.Save))
+    QTest.mouseClick(window.settings_button, Qt.MouseButton.LeftButton)
 
     reopened = MainWindow(settings_store=QSettings(settings_store.fileName(), QSettings.Format.IniFormat))
     try:
@@ -307,6 +311,11 @@ def test_settings_save_cancel_and_reopen(app, window, settings_store, tmp_path):
         assert reopened._settings.keep_zoom_position
     finally:
         dispose_window(reopened)
+
+    QTimer.singleShot(0, lambda: edit(3, 64, "  ", True, buttons.Save))
+    QTest.mouseClick(window.settings_button, Qt.MouseButton.LeftButton)
+    assert AppSettings.load(settings_store).mirrorchyan_cdk == ""
+    assert checks == [("example-cdk", True)]
 
 
 def test_file_menu_uses_the_hit_image_and_preserves_preview(app, window, tmp_path, monkeypatch):

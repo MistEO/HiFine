@@ -29,7 +29,7 @@
 - **macOS 14 及以上** 用 M 系列芯片的选 `arm64.dmg`，用 Intel 的选 `x86_64.dmg`，打开后把 HiFine 拖进“应用程序”。首次打开若提示无法验证，可以在“系统设置 → 隐私与安全性”里点“仍要打开”。
 - **Ubuntu 24.04（64 位 PC）** 选 `linux-amd64.deb`。
 
-HiFine 的所有看图功能装好就能用，去 GitHub 下载和更新都免费。Mirror 酱提供可选的付费下载加速。已经有 CDK 的朋友可以在“设置 → 软件更新”里填上，发现新版时就会自动下载安装包。谢谢愿意花钱加速、顺手支持作者的各位！
+HiFine 的所有看图功能装好就能用，去 GitHub 下载和更新都免费。Mirror 酱提供可选的付费下载加速。在“设置 → 软件更新”里填入或更换 CDK，点保存就能在窗口底部看到验证结果。CDK 无效或过期时会弹窗说明原因。验证通过后，发现新版会自动下载并打开安装包。谢谢愿意花钱加速、顺手支持作者的各位！
 
 [latest-release]: https://github.com/MistEO/HiFine/releases/latest
 [mirror-download]: https://mirrorchyan.com/zh/projects?rid=HiFine

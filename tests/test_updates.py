@@ -1,4 +1,4 @@
-"""Exercise the startup updater with Qt networking and local HTTP responses."""
+"""Exercise update checks with Qt networking and local HTTP responses."""
 
 from collections import deque
 import hashlib
@@ -12,10 +12,10 @@ from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
-from PySide6.QtCore import QCoreApplication, QEvent, QSettings, QUrl
+from PySide6.QtCore import QCoreApplication, QEvent, QSettings, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkProxy, QNetworkRequest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QDialogButtonBox, QMessageBox
 
 from hifine import updates
 
@@ -129,6 +129,16 @@ def query(url):
     return parse_qs(urlsplit(url).query, keep_blank_values=True)
 
 
+def save_cdk(window, cdk):
+    def edit():
+        dialog = QApplication.activeModalWidget()
+        dialog.mirrorchyan_cdk.setText(cdk)
+        dialog.buttons.button(QDialogButtonBox.StandardButton.Save).click()
+
+    QTimer.singleShot(0, edit)
+    window.show_settings()
+
+
 @pytest.mark.parametrize(("os_id", "machine", "target"), [
     ("win32", "AMD64", ("win", "x64", "windows-x64-setup.exe")),
     ("darwin", "arm64", ("macos", "arm64", "macOS-arm64.dmg")),
@@ -217,12 +227,15 @@ def test_cached_installer_checked_before_reuse(mirror, app, tmp_path, matching):
 
 
 def test_cdk_error_explained_without_disclosing_credentials(mirror):
+    warnings = []
+    mirror.checker.warning.connect(warnings.append)
     mirror.answer({"code": 7002, "msg": "invalid"}, status=403)
     mirror.checker.start(CDK)
     mirror.wait(1)
     assert len(mirror.requests) == 1 and not mirror.opened
     assert "CDK" in mirror.notices[-1]
     assert CDK not in "".join(mirror.notices)
+    assert not warnings
 
 
 def test_invalid_version_response_reports_failure(mirror):
@@ -254,13 +267,14 @@ def test_stopping_partial_download_removes_it_and_does_not_open(mirror, app, tmp
     assert not any(path.is_file() for path in tmp_path.rglob("*"))
 
 
-@pytest.mark.parametrize("can_open", [True, False])
-def test_viewer_uses_saved_cdk_and_opens_the_local_package(mirror, monkeypatch, tmp_path, can_open):
+@pytest.mark.parametrize(("save_in_settings", "can_open"), [(False, True), (False, False), (True, True)])
+def test_viewer_uses_saved_cdk_and_opens_the_local_package(mirror, monkeypatch, tmp_path, save_in_settings, can_open):
     from hifine.settings import AppSettings
     from hifine.viewer import MainWindow
 
     store = QSettings(str(tmp_path / "settings.ini"), QSettings.Format.IniFormat)
-    AppSettings(mirrorchyan_cdk=CDK).save(store)
+    if not save_in_settings:
+        AppSettings(mirrorchyan_cdk=CDK).save(store)
     mirror.answer(download_response())
     mirror.answer(PACKAGE)
     paths = []
@@ -274,13 +288,51 @@ def test_viewer_uses_saved_cdk_and_opens_the_local_package(mirror, monkeypatch, 
     window = MainWindow(settings_store=store)
     try:
         window.show()
-        window.start_update_check()
+        if save_in_settings:
+            save_cdk(window, CDK)
+        else:
+            window.start_update_check()
         mirror.wait(2)
         assert query(mirror.requests[0])["cdk"] == [CDK]
         path, = paths
         assert path.read_bytes() == PACKAGE
         message = window.statusBar().currentMessage()
         assert ("0.10.0" if can_open else path.name) in message
+        assert window.statusBar().isVisible()
+    finally:
+        window.close()
+        window.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
+@pytest.mark.parametrize(("body", "status", "result", "warns"), [
+    ({"code": 7002, "msg": CDK, "data": {"version_name": "v0.9.0"}}, 200, "CDK 无效", True),
+    ({"code": 7001}, 403, "CDK 已过期", True),
+    ({"code": 7003}, 403, "今日下载次数已用完", True),
+    (b"Service unavailable", 503, updates.NETWORK_ERROR, True),
+    (version_response("v0.9.0"), 200, "CDK 验证通过", False),
+])
+def test_saving_cdk_reports_only_the_latest_check(mirror, app, tmp_path, monkeypatch, body, status, result, warns):
+    from hifine.viewer import MainWindow
+
+    store = QSettings(str(tmp_path / "settings.ini"), QSettings.Format.IniFormat)
+    window = MainWindow(settings_store=store)
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda parent, title, message: warnings.append(message))
+    try:
+        window.show()
+        mirror.answer({"code": 7005}, pause=True)
+        save_cdk(window, "previous-key")
+        wait_until(app, lambda: bool(mirror.readable))
+        mirror.answer(body, status=status)
+        save_cdk(window, CDK)
+        mirror.resume.set()
+        mirror.wait(2)
+
+        assert [query(url)["cdk"] for url in mirror.requests] == [["previous-key"], [CDK]]
+        message = window.statusBar().currentMessage()
+        assert result in message and CDK not in message
+        assert warnings == ([message] if warns else [])
         assert window.statusBar().isVisible()
     finally:
         window.close()

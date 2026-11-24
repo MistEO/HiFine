@@ -108,7 +108,7 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(group)
         layout.setContentsMargins(16, 22, 16, 16)
         layout.setSpacing(12)
-        description = QLabel("启动时检查更新。填写 CDK 后，发现新版本会自动下载并打开安装包。")
+        description = QLabel("启动时检查更新。保存新的 CDK 后会立即验证并检查更新，发现新版会自动下载并打开安装包。")
         description.setObjectName("description")
         description.setWordWrap(True)
         layout.addWidget(description)

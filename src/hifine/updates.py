@@ -27,7 +27,7 @@ INSTALLERS = {
 ERRORS = {
     7001: "Mirror 酱 CDK 已过期，请在设置中更换或续费。",
     7002: "Mirror 酱 CDK 无效，请在设置中检查输入。",
-    7003: "Mirror 酱今日下载次数已用完，请明天再试。",
+    7003: "此 Mirror 酱 CDK 今日下载次数已用完，请明天再试。",
     7004: "此 Mirror 酱 CDK 不适用于 HiFine，请在设置中更换。",
     7005: "Mirror 酱 CDK 已被封禁，请联系 Mirror 酱售后。",
     8001: "当前平台暂无可用更新。",
@@ -71,6 +71,7 @@ def _http_success(reply):
 
 class UpdateChecker(QObject):
     notice = Signal(str)
+    warning = Signal(str)
     installer_ready = Signal(str, str)
 
     def __init__(self, parent=None):
@@ -82,18 +83,22 @@ class UpdateChecker(QObject):
         self._reply = None
         self._output = None
         self._lock = None
+        self._interactive = False
 
     def _get(self, url):
         request = QNetworkRequest(QUrl(url))
         request.setTransferTimeout(30_000)
         return self._network.get(request)
 
-    def start(self, cdk):
+    def start(self, cdk, *, interactive=False):
         self.stop()
+        self._interactive = interactive
         target = installer_target()
         if target is None:
-            self.notice.emit("当前平台暂无可用更新。")
+            self._report_error("当前平台暂无可用更新。")
             return
+        if interactive and cdk:
+            self.notice.emit("正在验证 Mirror 酱 CDK 并检查更新…")
         os_name, arch, suffix = target
         # Mirror 酱 selects the full installer when current_version is empty.
         query = {"current_version": "", "os": os_name, "arch": arch, "user_agent": "hifine_desktop"}
@@ -114,35 +119,39 @@ class UpdateChecker(QObject):
         if (not _http_success(reply)
                 or type(response.get("code")) is not int or response["code"] != 0
                 or not isinstance(data, dict)):
-            self.notice.emit(_error_message(response, NETWORK_ERROR))
+            self._report_error(_error_message(response, NETWORK_ERROR))
             return
         try:
             version = Version(data["version_name"])
         except (KeyError, TypeError, InvalidVersion):
-            self.notice.emit(NETWORK_ERROR)
+            self._report_error(NETWORK_ERROR)
             return
-        if version <= Version(__version__):
+        newer = version > Version(__version__)
+        if self._interactive and has_cdk:
+            result = f"发现 HiFine v{version}。" if newer else "当前没有可用更新。"
+            self.notice.emit(f"Mirror 酱 CDK 验证通过，{result}")
+        if not newer:
             return
         if not has_cdk:
             self.notice.emit(f"发现 HiFine v{version}，在设置中填写 Mirror 酱 CDK 可自动下载。")
             return
         url = data.get("url")
         if not isinstance(url, str) or not url:
-            self.notice.emit(f"发现 HiFine v{version}，Mirror 酱暂未提供下载地址。")
+            self._report_error(f"发现 HiFine v{version}，Mirror 酱暂未提供下载地址。")
             return
         source = QUrl(url)
         checksum = data.get("sha256")
         if (not source.isValid() or source.scheme() != "https" or not source.host()
                 or not isinstance(checksum, str) or not re.fullmatch("[0-9a-fA-F]{64}", checksum)
                 or data.get("update_type", "full") != "full"):
-            self.notice.emit("Mirror 酱返回的安装包信息不完整，无法验证安装包。")
+            self._report_error("Mirror 酱返回的安装包信息不完整，无法验证安装包。")
             return
 
         folder = update_directory()
         try:
             folder.mkdir(parents=True, exist_ok=True)
         except OSError:
-            self.notice.emit("无法创建安装包下载目录。")
+            self._report_error("无法创建安装包下载目录。")
             return
         self._version = str(version)
         self._path = folder / f"HiFine-{version}-{suffix}"
@@ -152,7 +161,7 @@ class UpdateChecker(QObject):
         self._lock.setStaleLockTime(0)
         if not self._lock.tryLock(0):
             if self._lock.error() != QLockFile.LockError.LockFailedError:
-                self.notice.emit("无法写入安装包下载目录。")
+                self._report_error("无法写入安装包下载目录。")
             self._lock = None
             return
         self._url = url
@@ -234,7 +243,12 @@ class UpdateChecker(QObject):
 
     def _failed(self, message):
         self.stop()
+        self._report_error(message)
+
+    def _report_error(self, message):
         self.notice.emit(message)
+        if self._interactive:
+            self.warning.emit(message)
 
     def stop(self):
         self._cache_timer.stop()

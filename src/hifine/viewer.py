@@ -111,7 +111,12 @@ class MainWindow(QMainWindow):
         self._direction = 1
         self._reads = ImageReader(self)
         self._settings_store = settings_store
-        self._updates = None
+        self._settings = None
+        self._updates = UpdateChecker(self)
+        self._updates.notice.connect(self._show_update_notice)
+        self._updates.warning.connect(lambda message: QMessageBox.warning(self, "软件更新", message))
+        self._updates.installer_ready.connect(self._open_installer)
+        QApplication.instance().aboutToQuit.connect(self._updates.stop)
         self._apply_settings(AppSettings.load(settings_store))
         self._reads.ready.connect(self._read_finished)
         self._reads.folder_rescanned.connect(self._menu_folder_rescanned)
@@ -382,17 +387,19 @@ class MainWindow(QMainWindow):
         dialog.deleteLater()
 
     def _apply_settings(self, settings):
-        if self._updates is not None and self._settings.mirrorchyan_cdk != settings.mirrorchyan_cdk:
-            self._updates.stop()
+        previous = self._settings
         self._settings = settings
         self._reads.set_cache_limits(max_entries=settings.cache_max_entries,
                                      max_bytes=settings.cache_max_mib * 1024**2)
+        if previous is None or settings.mirrorchyan_cdk == previous.mirrorchyan_cdk:
+            return
+        if settings.mirrorchyan_cdk:
+            self._updates.start(settings.mirrorchyan_cdk, interactive=True)
+        else:
+            self._updates.stop()
+            self._show_update_notice("Mirror 酱 CDK 已清除。")
 
     def start_update_check(self):
-        self._updates = UpdateChecker(self)
-        self._updates.notice.connect(self._show_update_notice)
-        self._updates.installer_ready.connect(self._open_installer)
-        QApplication.instance().aboutToQuit.connect(self._updates.stop)
         self._updates.start(self._settings.mirrorchyan_cdk)
 
     def _show_update_notice(self, message):
@@ -875,8 +882,7 @@ class MainWindow(QMainWindow):
             self._close_after_operation = True
             event.ignore()
             return
-        if self._updates is not None:
-            self._updates.stop()
+        self._updates.stop()
         self._clear_menu_watch()
         self._loading_hint.stop()
         self._reads.reset()
